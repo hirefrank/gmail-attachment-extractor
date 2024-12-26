@@ -1,0 +1,13 @@
+{
+  "tasks": {
+    "dev": "deno run --watch main.ts",
+    "setup": "deno run -A oauth_setup.ts",
+    "run": "deno run -A main.ts"
+  },
+  "imports": {
+    "googleapis": "npm:googleapis@129.0.0",
+    "base64": "https://deno.land/std@0.220.1/encoding/base64.ts",
+    "open": "https://deno.land/x/open@v0.0.6/index.ts",
+    "server": "https://deno.land/std@0.220.1/http/server.ts"
+  }
+}
