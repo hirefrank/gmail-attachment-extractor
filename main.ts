@@ -95,13 +95,41 @@ class GmailAttachmentExtractor {
     return filePath;
   }
 
+  private async getOrCreateYearFolder(parentFolderId: string, year: string): Promise<string> {
+    const response = await this.drive.files.list({
+      q: `name='${year}' and '${parentFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+      spaces: 'drive',
+      fields: 'files(id, name)'
+    });
+
+    if (response.data.files && response.data.files.length > 0) {
+      const folderId = response.data.files[0].id!;
+      console.log(`Using existing year folder: ${year} (${folderId})`);
+      return folderId;
+    }
+
+    const createResponse = await this.drive.files.create({
+      requestBody: {
+        name: year,
+        mimeType: "application/vnd.google-apps.folder",
+        parents: [parentFolderId]
+      },
+      fields: "id",
+    });
+
+    console.log(`Created new year folder: ${year} (${createResponse.data.id})`);
+    return createResponse.data.id!;
+  }
+
   private async uploadToDrive(
     filePath: string,
     filename: string,
     mimeType: string,
-    folderId: string
+    parentFolderId: string,
+    year: string
   ): Promise<void> {
     try {
+      const yearFolderId = await this.getOrCreateYearFolder(parentFolderId, year);
       const fileContent = await Deno.readFile(filePath);
       const blob = new Blob([fileContent], { type: mimeType });
 
@@ -117,12 +145,11 @@ class GmailAttachmentExtractor {
 
       const metadata = JSON.stringify({
         name: filename,
-        parents: [folderId]
+        parents: [yearFolderId]
       });
 
       const metadataBlob = new Blob([metadata], { type: 'application/json' });
       formData.append('metadata', metadataBlob);
-
       formData.append('file', blob);
 
       const response = await fetch(
@@ -150,7 +177,7 @@ class GmailAttachmentExtractor {
 
   private async isFileUploaded(filename: string): Promise<boolean> {
     try {
-      const content = await Deno.readTextFile("uploaded_files.json");
+      const content = await Deno.readTextFile("./data/uploaded_files.json");
       const uploadedFiles: string[] = JSON.parse(content);
       return uploadedFiles.includes(filename);
     } catch (error) {
@@ -161,10 +188,10 @@ class GmailAttachmentExtractor {
 
   private async markFileAsUploaded(filename: string): Promise<void> {
     try {
-      const content = await Deno.readTextFile("uploaded_files.json");
+      const content = await Deno.readTextFile("./data/uploaded_files.json");
       const uploadedFiles: string[] = JSON.parse(content);
       uploadedFiles.push(filename);
-      await Deno.writeTextFile("uploaded_files.json", JSON.stringify(uploadedFiles, null, 2));
+      await Deno.writeTextFile("./data/uploaded_files.json", JSON.stringify(uploadedFiles, null, 2));
     } catch (error) {
       console.error("Error updating uploaded files:", error);
     }
@@ -195,12 +222,22 @@ class GmailAttachmentExtractor {
           id: email.id!,
         });
 
+        const internalDate = message.data.internalDate;
+        if (!internalDate) {
+          console.warn(`No date found for email ${email.id}, using current year`);
+          continue;
+        }
+
+        const emailDate = new Date(parseInt(internalDate));
+        const year = emailDate.getFullYear().toString();
+        console.log(`Processing email from year: ${year}`);
+
         const parts = message.data.payload?.parts || [];
 
         for (const part of parts) {
           if (part.filename && part.body?.attachmentId) {
-            if (await this.isFileUploaded(part.filename)) {
-              console.log(`Skipping already uploaded file: ${part.filename}`);
+            if (await this.isFileUploaded(`${year}/${part.filename}`)) {
+              console.log(`Skipping already uploaded file: ${year}/${part.filename}`);
               continue;
             }
 
@@ -218,11 +255,12 @@ class GmailAttachmentExtractor {
                 filePath,
                 part.filename,
                 part.mimeType || "application/octet-stream",
-                folderId
+                folderId,
+                year
               );
-              console.log(`Uploaded: ${part.filename}`);
+              console.log(`Uploaded: ${part.filename} to year folder: ${year}`);
 
-              await this.markFileAsUploaded(part.filename);
+              await this.markFileAsUploaded(`${year}/${part.filename}`);
 
               await Deno.remove(filePath);
             } catch (error: unknown) {
@@ -259,7 +297,7 @@ class GmailAttachmentExtractor {
 // Load config from file
 const loadConfig = async (): Promise<Config> => {
   try {
-    const configText = await Deno.readTextFile("./config.json");
+    const configText = await Deno.readTextFile("./data/config.json");
     const config: Config = JSON.parse(configText);
     console.log('\nConfiguration loaded successfully');
     if (config.label) console.log(`Found label in config: ${config.label}`);
@@ -283,17 +321,33 @@ const getConfigValue = (
     return cmdArg;
   }
   if (configValue) {
-    console.log(`Using ${valueName} from config.json: ${configValue}`);
+    console.log(`Using ${valueName} from data/config.json: ${configValue}`);
     return configValue;
   }
   console.log(`Using default ${valueName}: ${defaultValue}`);
   return defaultValue;
 };
 
+// Initialize uploaded_files.json if it doesn't exist
+const initializeUploadedFiles = async () => {
+  try {
+    await Deno.stat("./data/uploaded_files.json");
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) {
+      await Deno.writeTextFile("./data/uploaded_files.json", JSON.stringify([]));
+      console.log("Initialized uploaded_files.json");
+    } else {
+      console.error("Error checking uploaded_files.json:", error);
+    }
+  }
+};
+
 // Main execution
-const main = async () => {
+export const main = async () => {
   try {
     console.log('\nStarting Gmail Attachment Extractor');
+
+    await initializeUploadedFiles();
 
     const config = await loadConfig();
 

@@ -63,15 +63,15 @@ async function getTokens(clientId: string, clientSecret: string): Promise<void> 
         console.log('Refresh Token:', tokens.refresh_token ? 'Present' : 'Missing');
 
         await Deno.writeTextFile(
-          'config.json',
+          './data/config.json',
           JSON.stringify(configObject, null, 2)
         );
 
-        console.log('\nConfiguration saved to config.json');
+        console.log('\nConfiguration saved to data/config.json');
         console.log('Verifying config file...');
 
         // Verify the saved config
-        const savedConfig = JSON.parse(await Deno.readTextFile('config.json'));
+        const savedConfig = JSON.parse(await Deno.readTextFile('./data/config.json'));
         console.log('Config verification:',
           savedConfig.credentials &&
           savedConfig.tokens &&
