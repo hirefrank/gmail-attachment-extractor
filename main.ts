@@ -8,6 +8,21 @@ const DEFAULT_CONFIG = {
   outputFolder: "Gmail Attachments"
 } as const;
 
+// Default configuration values
+const DEFAULT_CONFIG_JSON = {
+  credentials: {
+    client_id: "your_client_id",
+    client_secret: "your_client_secret",
+    redirect_uri: "http://localhost:9000/callback"
+  },
+  tokens: {
+    access_token: "your_access_token",
+    refresh_token: "your_refresh_token"
+  },
+  label: "default_label",
+  outputFolder: "default_folder"
+};
+
 interface Config {
   credentials: {
     client_id: string;
@@ -342,11 +357,26 @@ const initializeUploadedFiles = async () => {
   }
 };
 
+// Initialize config.json if it doesn't exist
+const initializeConfig = async () => {
+  try {
+    await Deno.stat("./data/config.json");
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) {
+      await Deno.writeTextFile("./data/config.json", JSON.stringify(DEFAULT_CONFIG_JSON, null, 2));
+      console.log("Initialized config.json with default values");
+    } else {
+      console.error("Error checking config.json:", error);
+    }
+  }
+};
+
 // Main execution
 export const main = async () => {
   try {
     console.log('\nStarting Gmail Attachment Extractor');
 
+    await initializeConfig();
     await initializeUploadedFiles();
 
     const config = await loadConfig();
