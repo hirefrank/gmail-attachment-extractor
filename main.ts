@@ -363,18 +363,8 @@ const initializeConfig = async () => {
     await Deno.stat("./data/config.json");
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) {
-      console.log("config.json not found. Running OAuth setup...");
-      const process = Deno.run({
-        cmd: ["deno", "run", "-A", "oauth_setup.ts"],
-        stdout: "inherit",
-        stderr: "inherit",
-      });
-      const status = await process.status();
-      if (!status.success) {
-        console.error("OAuth setup failed.");
-        Deno.exit(1);
-      }
-      console.log("OAuth setup completed successfully.");
+      await Deno.writeTextFile("./data/config.json", JSON.stringify(DEFAULT_CONFIG_JSON, null, 2));
+      console.log("Initialized config.json with default values");
     } else {
       console.error("Error checking config.json:", error);
     }
@@ -413,5 +403,7 @@ export const main = async () => {
   }
 };
 
-// Run the script
-await main();
+// only executed if invoked from command line
+if (import.meta.main) {
+  await main();
+}
