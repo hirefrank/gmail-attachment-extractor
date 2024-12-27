@@ -1,4 +1,5 @@
-import { google } from "npm:googleapis";
+import { google } from "googleapis";
+import type { gmail_v1 } from "googleapis";
 import { ensureDir } from "https://deno.land/std@0.220.1/fs/ensure_dir.ts";
 import { join } from "https://deno.land/std@0.220.1/path/mod.ts";
 
@@ -7,21 +8,6 @@ const DEFAULT_CONFIG = {
   label: "Work",
   outputFolder: "Gmail Attachments"
 } as const;
-
-// Default configuration values
-const DEFAULT_CONFIG_JSON = {
-  credentials: {
-    client_id: "your_client_id",
-    client_secret: "your_client_secret",
-    redirect_uri: "http://localhost:9000/callback"
-  },
-  tokens: {
-    access_token: "your_access_token",
-    refresh_token: "your_refresh_token"
-  },
-  label: "default_label",
-  outputFolder: "default_folder"
-};
 
 interface Config {
   credentials: {
@@ -59,6 +45,78 @@ class GmailAttachmentExtractor {
     this.drive = google.drive({ version: "v3", auth });
   }
 
+  private getSenderInfo(headers: gmail_v1.Schema$MessagePartHeader[] | undefined): { lastName: string; email: string } {
+    const fromHeader = headers?.find(header => header.name?.toLowerCase() === 'from');
+    const fromValue = fromHeader?.value || '';
+
+    // Try to extract name and email from format: "First Last <email@domain.com>"
+    const match = fromValue.match(/^(?:"?([^"]*)"?\s)?(?:<)?([^>]*)(?:>)?$/);
+
+    if (match) {
+      const [, fullName, email] = match;
+      if (fullName) {
+        // Split the full name and get the last part as last name
+        const nameParts = fullName.trim().split(/\s+/);
+        return {
+          lastName: nameParts[nameParts.length - 1] || email.split('@')[0],
+          email: email.trim()
+        };
+      }
+      return {
+        lastName: email.split('@')[0],
+        email: email.trim()
+      };
+    }
+
+    return {
+      lastName: fromValue.split('@')[0],
+      email: fromValue
+    };
+  }
+
+  private formatSenderName(name: string): string {
+    // Remove special characters and spaces, keep alphanumeric and dots
+    return name
+      .replace(/[^a-zA-Z0-9.-]/g, '_')
+      .replace(/_{2,}/g, '_')  // Replace multiple underscores with single
+      .replace(/^_|_$/g, '')   // Remove leading/trailing underscores
+      .substring(0, 50);       // Limit length
+  }
+
+  private formatDate(date: Date): string {
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    return month;
+  }
+
+  private formatFilename(originalFilename: string, sender: string, month: string): string {
+    // Get the file extension
+    const lastDot = originalFilename.lastIndexOf('.');
+    const ext = lastDot > -1 ? originalFilename.slice(lastDot).toLowerCase() : '';
+    const nameWithoutExt = lastDot > -1 ? originalFilename.slice(0, lastDot) : originalFilename;
+
+    // Truncate each component to reasonable lengths
+    const truncatedSender = sender.substring(0, 20);  // Max 20 chars for sender
+    const truncatedOriginal = nameWithoutExt
+      .substring(0, 50)  // Max 50 chars for original name
+      .replace(/[^a-zA-Z0-9.-]/g, '_')
+      .replace(/_{2,}/g, '_')
+      .replace(/^_|_$/g, '');
+
+    // Create new filename: MM_sender_name.ext
+    const newFilename = `${month}_${truncatedSender}_${truncatedOriginal}${ext}`;
+
+    // Final safety check - ensure total length is reasonable
+    const maxLength = 100; // Conservative max length
+    if (newFilename.length > maxLength) {
+      // If too long, truncate the original name portion while preserving extension
+      const availableSpace = maxLength - (month.length + truncatedSender.length + ext.length + 2); // 2 for underscores
+      const truncatedName = truncatedOriginal.substring(0, Math.max(0, availableSpace));
+      return `${month}_${truncatedSender}_${truncatedName}${ext}`;
+    }
+
+    return newFilename;
+  }
+
   private async createFolderInDrive(folderName: string): Promise<string> {
     const response = await this.drive.files.list({
       q: `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
@@ -81,6 +139,32 @@ class GmailAttachmentExtractor {
     });
 
     console.log(`Created new folder: ${folderName} (${createResponse.data.id})`);
+    return createResponse.data.id!;
+  }
+
+  private async getOrCreateYearFolder(parentFolderId: string, year: string): Promise<string> {
+    const response = await this.drive.files.list({
+      q: `name='${year}' and '${parentFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+      spaces: 'drive',
+      fields: 'files(id, name)'
+    });
+
+    if (response.data.files && response.data.files.length > 0) {
+      const folderId = response.data.files[0].id!;
+      console.log(`Using existing year folder: ${year} (${folderId})`);
+      return folderId;
+    }
+
+    const createResponse = await this.drive.files.create({
+      requestBody: {
+        name: year,
+        mimeType: "application/vnd.google-apps.folder",
+        parents: [parentFolderId]
+      },
+      fields: "id",
+    });
+
+    console.log(`Created new year folder: ${year} (${createResponse.data.id})`);
     return createResponse.data.id!;
   }
 
@@ -108,32 +192,6 @@ class GmailAttachmentExtractor {
     await Deno.writeFile(filePath, data);
 
     return filePath;
-  }
-
-  private async getOrCreateYearFolder(parentFolderId: string, year: string): Promise<string> {
-    const response = await this.drive.files.list({
-      q: `name='${year}' and '${parentFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-      spaces: 'drive',
-      fields: 'files(id, name)'
-    });
-
-    if (response.data.files && response.data.files.length > 0) {
-      const folderId = response.data.files[0].id!;
-      console.log(`Using existing year folder: ${year} (${folderId})`);
-      return folderId;
-    }
-
-    const createResponse = await this.drive.files.create({
-      requestBody: {
-        name: year,
-        mimeType: "application/vnd.google-apps.folder",
-        parents: [parentFolderId]
-      },
-      fields: "id",
-    });
-
-    console.log(`Created new year folder: ${year} (${createResponse.data.id})`);
-    return createResponse.data.id!;
   }
 
   private async uploadToDrive(
@@ -239,50 +297,58 @@ class GmailAttachmentExtractor {
 
         const internalDate = message.data.internalDate;
         if (!internalDate) {
-          console.warn(`No date found for email ${email.id}, using current year`);
+          console.warn(`No date found for email ${email.id}, skipping`);
           continue;
         }
 
         const emailDate = new Date(parseInt(internalDate));
         const year = emailDate.getFullYear().toString();
-        console.log(`Processing email from year: ${year}`);
+        const month = this.formatDate(emailDate);
+
+        // Get sender information
+        const { lastName } = this.getSenderInfo(message.data.payload?.headers);
+        const senderName = this.formatSenderName(lastName);
+
+        console.log(`Processing email from ${senderName} (${month}/${year})`);
 
         const parts = message.data.payload?.parts || [];
 
         for (const part of parts) {
           if (part.filename && part.body?.attachmentId) {
-            if (await this.isFileUploaded(`${year}/${part.filename}`)) {
-              console.log(`Skipping already uploaded file: ${year}/${part.filename}`);
+            const newFilename = this.formatFilename(part.filename, senderName, month);
+
+            if (await this.isFileUploaded(`${year}/${newFilename}`)) {
+              console.log(`Skipping already uploaded file: ${year}/${newFilename}`);
               continue;
             }
 
             try {
-              console.log(`Processing: ${part.filename}`);
+              console.log(`Processing: ${newFilename}`);
 
               const filePath = await this.downloadAttachment(
                 email.id!,
                 part.body.attachmentId,
-                part.filename
+                newFilename
               );
               console.log(`Downloaded to: ${filePath}`);
 
               await this.uploadToDrive(
                 filePath,
-                part.filename,
+                newFilename,
                 part.mimeType || "application/octet-stream",
                 folderId,
                 year
               );
-              console.log(`Uploaded: ${part.filename} to year folder: ${year}`);
+              console.log(`Uploaded: ${newFilename} to year folder: ${year}`);
 
-              await this.markFileAsUploaded(`${year}/${part.filename}`);
+              await this.markFileAsUploaded(`${year}/${newFilename}`);
 
               await Deno.remove(filePath);
             } catch (error: unknown) {
               if (error instanceof Error) {
-                console.error(`Error processing ${part.filename}:`, error.message);
+                console.error(`Error processing ${newFilename}:`, error.message);
               } else {
-                console.error(`Error processing ${part.filename}:`, String(error));
+                console.error(`Error processing ${newFilename}:`, String(error));
               }
               continue;
             }
@@ -336,48 +402,17 @@ const getConfigValue = (
     return cmdArg;
   }
   if (configValue) {
-    console.log(`Using ${valueName} from data/config.json: ${configValue}`);
+    console.log(`Using ${valueName} from config.json: ${configValue}`);
     return configValue;
   }
   console.log(`Using default ${valueName}: ${defaultValue}`);
   return defaultValue;
 };
 
-// Initialize uploaded_files.json if it doesn't exist
-const initializeUploadedFiles = async () => {
-  try {
-    await Deno.stat("./data/uploaded_files.json");
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) {
-      await Deno.writeTextFile("./data/uploaded_files.json", JSON.stringify([]));
-      console.log("Initialized uploaded_files.json");
-    } else {
-      console.error("Error checking uploaded_files.json:", error);
-    }
-  }
-};
-
-// Initialize config.json if it doesn't exist
-const initializeConfig = async () => {
-  try {
-    await Deno.stat("./data/config.json");
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) {
-      await Deno.writeTextFile("./data/config.json", JSON.stringify(DEFAULT_CONFIG_JSON, null, 2));
-      console.log("Initialized config.json with default values");
-    } else {
-      console.error("Error checking config.json:", error);
-    }
-  }
-};
-
 // Main execution
 export const main = async () => {
   try {
     console.log('\nStarting Gmail Attachment Extractor');
-
-    await initializeConfig();
-    await initializeUploadedFiles();
 
     const config = await loadConfig();
 
@@ -403,7 +438,5 @@ export const main = async () => {
   }
 };
 
-// only executed if invoked from command line
-if (import.meta.main) {
-  await main();
-}
+// Run the script
+await main();

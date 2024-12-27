@@ -31,3 +31,5 @@ debug.log
 dist/
 build/
 out/
+
+temp_attachments/
