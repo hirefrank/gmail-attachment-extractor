@@ -429,10 +429,41 @@ const getConfigValue = (
   return defaultValue;
 };
 
+// Initialize uploaded_files.json if it doesn't exist
+const initializeUploadedFiles = async () => {
+  try {
+    await Deno.stat("./data/uploaded_files.json");
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) {
+      await Deno.writeTextFile("./data/uploaded_files.json", JSON.stringify([]));
+      console.log("Initialized uploaded_files.json with an empty array");
+    } else {
+      console.error("Error checking uploaded_files.json:", error);
+    }
+  }
+};
+
+// Initialize config.json if it doesn't exist
+const initializeConfig = async () => {
+  try {
+    await Deno.stat("./data/config.json");
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) {
+      await Deno.writeTextFile("./data/config.json", JSON.stringify(DEFAULT_CONFIG, null, 2));
+      console.log("Initialized config.json with default values");
+    } else {
+      console.error("Error checking config.json:", error);
+    }
+  }
+};
+
 // Main execution
 export const main = async () => {
   try {
     console.log('\nStarting Gmail Attachment Extractor');
+
+    await initializeConfig();
+    await initializeUploadedFiles();
 
     const config = await loadConfig();
 
@@ -457,7 +488,6 @@ export const main = async () => {
     Deno.exit(1);
   }
 };
-
 
 // only executed if invoked from command line
 if (import.meta.main) {
