@@ -270,6 +270,22 @@ class GmailAttachmentExtractor {
     }
   }
 
+  private async modifyLabels(messageId: string, labelsToRemove: string[], labelsToAdd: string[]): Promise<void> {
+    try {
+      await this.gmail.users.messages.modify({
+        userId: "me",
+        id: messageId,
+        requestBody: {
+          removeLabelIds: labelsToRemove,
+          addLabelIds: labelsToAdd,
+        },
+      });
+      console.log(`Modified labels for message: ${messageId}`);
+    } catch (error) {
+      console.error(`Error modifying labels for message ${messageId}:`, error);
+    }
+  }
+
   public async extractAttachments(label: string, outputFolder: string): Promise<void> {
     try {
       await ensureDir(this.tempDir);
@@ -344,6 +360,10 @@ class GmailAttachmentExtractor {
               await this.markFileAsUploaded(`${year}/${newFilename}`);
 
               await Deno.remove(filePath);
+
+              // Derive the new label from the existing one
+              const newLabel = label.replace(/^[^-]+/, "processed");
+              await this.modifyLabels(email.id!, [label], [newLabel]);
             } catch (error: unknown) {
               if (error instanceof Error) {
                 console.error(`Error processing ${newFilename}:`, error.message);
@@ -438,5 +458,8 @@ export const main = async () => {
   }
 };
 
-// Run the script
-await main();
+
+// only executed if invoked from command line
+if (import.meta.main) {
+  await main();
+}
