@@ -3,6 +3,12 @@ import type { gmail_v1 } from "googleapis";
 import { ensureDir } from "https://deno.land/std@0.220.1/fs/ensure_dir.ts";
 import { join } from "https://deno.land/std@0.220.1/path/mod.ts";
 
+// OAuth scopes required for the application
+const SCOPES = [
+  'https://www.googleapis.com/auth/gmail.modify',  // For reading messages and modifying labels
+  'https://www.googleapis.com/auth/drive.file'     // For uploading to Drive
+] as const;
+
 // Default configuration values
 const DEFAULT_CONFIG = {
   label: "Work",
@@ -38,11 +44,37 @@ class GmailAttachmentExtractor {
     auth.setCredentials({
       access_token: config.tokens.access_token,
       refresh_token: config.tokens.refresh_token,
+      scope: SCOPES.join(' '), // Include scopes in token
       token_type: 'Bearer'
     });
 
     this.gmail = google.gmail({ version: "v1", auth });
     this.drive = google.drive({ version: "v3", auth });
+  }
+
+  private async verifyPermissions(): Promise<void> {
+    try {
+      console.log('Verifying Gmail permissions...');
+      const gmailTest = await this.gmail.users.labels.list({ userId: 'me' });
+      console.log('Gmail permissions verified:', gmailTest.data.labels?.length, 'labels found');
+
+      console.log('Verifying Drive permissions...');
+      const driveTest = await this.drive.files.list({
+        pageSize: 1,
+        fields: 'files(id, name)'
+      });
+      console.log('Drive permissions verified:', driveTest.data.files?.length, 'files found');
+
+      console.log('All permissions verified successfully');
+    } catch (error: unknown) {
+      console.error('Permission verification failed:', error);
+      if (error instanceof Error && 'response' in error) {
+        const errorWithResponse = error as { response: { data: unknown } };
+        console.error('Error details:', errorWithResponse.response.data);
+      }
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new Error(`Permission verification failed: ${errorMessage}`);
+    }
   }
 
   private getSenderInfo(headers: gmail_v1.Schema$MessagePartHeader[] | undefined): { lastName: string; email: string } {
@@ -118,54 +150,72 @@ class GmailAttachmentExtractor {
   }
 
   private async createFolderInDrive(folderName: string): Promise<string> {
-    const response = await this.drive.files.list({
-      q: `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-      spaces: 'drive',
-      fields: 'files(id, name)'
-    });
+    try {
+      const response = await this.drive.files.list({
+        q: `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+        spaces: 'drive',
+        fields: 'files(id, name)'
+      });
 
-    if (response.data.files && response.data.files.length > 0) {
-      const folderId = response.data.files[0].id!;
-      console.log(`Using existing folder: ${folderName} (${folderId})`);
-      return folderId;
+      if (response.data.files && response.data.files.length > 0) {
+        const folderId = response.data.files[0].id!;
+        console.log(`Using existing folder: ${folderName} (${folderId})`);
+        return folderId;
+      }
+
+      const createResponse = await this.drive.files.create({
+        requestBody: {
+          name: folderName,
+          mimeType: "application/vnd.google-apps.folder",
+        },
+        fields: "id",
+      });
+
+      console.log(`Created new folder: ${folderName} (${createResponse.data.id})`);
+      return createResponse.data.id!;
+    } catch (error: unknown) {
+      console.error('Error creating folder in Drive:', error);
+      if (error && typeof error === 'object' && 'response' in error) {
+        // deno-lint-ignore no-explicit-any
+        console.error('Error details:', (error as any).response.data);
+      }
+      throw error;
     }
-
-    const createResponse = await this.drive.files.create({
-      requestBody: {
-        name: folderName,
-        mimeType: "application/vnd.google-apps.folder",
-      },
-      fields: "id",
-    });
-
-    console.log(`Created new folder: ${folderName} (${createResponse.data.id})`);
-    return createResponse.data.id!;
   }
 
   private async getOrCreateYearFolder(parentFolderId: string, year: string): Promise<string> {
-    const response = await this.drive.files.list({
-      q: `name='${year}' and '${parentFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-      spaces: 'drive',
-      fields: 'files(id, name)'
-    });
+    try {
+      const response = await this.drive.files.list({
+        q: `name='${year}' and '${parentFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+        spaces: 'drive',
+        fields: 'files(id, name)'
+      });
 
-    if (response.data.files && response.data.files.length > 0) {
-      const folderId = response.data.files[0].id!;
-      console.log(`Using existing year folder: ${year} (${folderId})`);
-      return folderId;
+      if (response.data.files && response.data.files.length > 0) {
+        const folderId = response.data.files[0].id!;
+        console.log(`Using existing year folder: ${year} (${folderId})`);
+        return folderId;
+      }
+
+      const createResponse = await this.drive.files.create({
+        requestBody: {
+          name: year,
+          mimeType: "application/vnd.google-apps.folder",
+          parents: [parentFolderId]
+        },
+        fields: "id",
+      });
+
+      console.log(`Created new year folder: ${year} (${createResponse.data.id})`);
+      return createResponse.data.id!;
+    } catch (error: unknown) {
+      console.error('Error creating year folder:', error);
+      if (error && typeof error === 'object' && 'response' in error) {
+        // deno-lint-ignore no-explicit-any
+        console.error('Error details:', (error as any).response.data);
+      }
+      throw error;
     }
-
-    const createResponse = await this.drive.files.create({
-      requestBody: {
-        name: year,
-        mimeType: "application/vnd.google-apps.folder",
-        parents: [parentFolderId]
-      },
-      fields: "id",
-    });
-
-    console.log(`Created new year folder: ${year} (${createResponse.data.id})`);
-    return createResponse.data.id!;
   }
 
   private async downloadAttachment(
@@ -173,25 +223,34 @@ class GmailAttachmentExtractor {
     attachmentId: string,
     filename: string
   ): Promise<string> {
-    const attachment = await this.gmail.users.messages.attachments.get({
-      userId: "me",
-      messageId: messageId,
-      id: attachmentId,
-    });
+    try {
+      const attachment = await this.gmail.users.messages.attachments.get({
+        userId: "me",
+        messageId: messageId,
+        id: attachmentId,
+      });
 
-    if (!attachment.data.data) {
-      throw new Error('No attachment data found');
+      if (!attachment.data.data) {
+        throw new Error('No attachment data found');
+      }
+
+      await ensureDir(this.tempDir);
+
+      const safeFilename = filename.replace(/[^a-zA-Z0-9.-]/g, '_');
+      const filePath = join(this.tempDir, safeFilename);
+
+      const data = Uint8Array.from(atob(attachment.data.data.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+      await Deno.writeFile(filePath, data);
+
+      return filePath;
+    } catch (error: unknown) {
+      console.error('Error downloading attachment:', error);
+      if (error && typeof error === 'object' && 'response' in error) {
+        // deno-lint-ignore no-explicit-any
+        console.error('Error details:', (error as any).response.data);
+      }
+      throw error;
     }
-
-    await ensureDir(this.tempDir);
-
-    const safeFilename = filename.replace(/[^a-zA-Z0-9.-]/g, '_');
-    const filePath = join(this.tempDir, safeFilename);
-
-    const data = Uint8Array.from(atob(attachment.data.data.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
-    await Deno.writeFile(filePath, data);
-
-    return filePath;
   }
 
   private async uploadToDrive(
@@ -237,14 +296,18 @@ class GmailAttachmentExtractor {
       );
 
       if (!response.ok) {
-        throw new Error(`Upload failed with status ${response.status}: ${await response.text()}`);
+        const errorText = await response.text();
+        throw new Error(`Upload failed with status ${response.status}: ${errorText}`);
       }
+
+      console.log(`Successfully uploaded ${filename} to Drive`);
     } catch (error: unknown) {
-      if (error instanceof Error) {
-        throw new Error(`Upload failed: ${error.message}`);
-      } else {
-        throw new Error('Upload failed: Unknown error occurred');
+      console.error('Error uploading to Drive:', error);
+      if (error && typeof error === 'object' && 'response' in error &&
+          error.response && typeof error.response === 'object' && 'data' in error.response) {
+        console.error('Error details:', error.response.data);
       }
+      throw error;
     }
   }
 
@@ -267,27 +330,63 @@ class GmailAttachmentExtractor {
       await Deno.writeTextFile("./data/uploaded_files.json", JSON.stringify(uploadedFiles, null, 2));
     } catch (error) {
       console.error("Error updating uploaded files:", error);
+      throw error;
     }
   }
 
   private async modifyLabels(messageId: string, labelsToRemove: string[], labelsToAdd: string[]): Promise<void> {
     try {
-      await this.gmail.users.messages.modify({
+      // First, get and log available labels
+      const labelsResponse = await this.gmail.users.labels.list({
+        userId: "me"
+      });
+      //console.log("Available labels:", labelsResponse.data.labels?.map(l => ({name: l.name, id: l.id})));
+
+      // Get label IDs for the labels we want to add/remove
+      const labelMap = new Map(labelsResponse.data.labels?.map(l => [l.name, l.id]));
+
+      const addLabelIds = labelsToAdd.map(label => {
+        const id = labelMap.get(label);
+        if (!id) console.warn(`Warning: Label "${label}" not found`);
+        return id;
+      }).filter((id): id is string => id !== undefined);
+
+      const removeLabelIds = labelsToRemove.map(label => {
+        const id = labelMap.get(label);
+        if (!id) console.warn(`Warning: Label "${label}" not found`);
+        return id;
+      }).filter((id): id is string => id !== undefined);
+
+      //console.log(`Attempting to modify labels - Remove: ${JSON.stringify(removeLabelIds)}, Add: ${JSON.stringify(addLabelIds)}`);
+
+      const _result = await this.gmail.users.messages.modify({
         userId: "me",
         id: messageId,
         requestBody: {
-          removeLabelIds: labelsToRemove,
-          addLabelIds: labelsToAdd,
+          removeLabelIds: removeLabelIds,
+          addLabelIds: addLabelIds,
         },
       });
-      console.log(`Modified labels for message: ${messageId}`);
+
+      //console.log(`Modified labels for message: ${messageId}`, {
+      //  removed: removeLabelIds,
+      //  added: addLabelIds,
+      //  response: result.data
+      //});
     } catch (error) {
       console.error(`Error modifying labels for message ${messageId}:`, error);
+      if (error instanceof Error && 'response' in error && typeof error.response === 'object' && error.response && 'data' in error.response) {
+        console.error('Error details:', error.response.data);
+      }
+      throw error;
     }
   }
 
   public async extractAttachments(label: string, outputFolder: string): Promise<void> {
     try {
+      // Verify permissions before starting
+      await this.verifyPermissions();
+
       await ensureDir(this.tempDir);
       console.log(`Created temporary directory: ${this.tempDir}`);
 
@@ -361,9 +460,18 @@ class GmailAttachmentExtractor {
 
               await Deno.remove(filePath);
 
-              // Derive the new label from the existing one
-              const newLabel = label.replace(/^[^-]+/, "processed");
-              await this.modifyLabels(email.id!, [label], [newLabel]);
+              // Use the existing "processed insurance claim" label format
+              const processedLabel = label.replace("* insurance claim", "processed insurance claim");
+
+              // Double check the label exists
+              const labels = await this.gmail.users.labels.list({ userId: "me" });
+              const processedLabelId = labels.data.labels?.find(l => l.name === processedLabel)?.id;
+
+              if (!processedLabelId) {
+                throw new Error(`Expected label "${processedLabel}" not found. Please create it in Gmail first.`);
+              }
+
+              await this.modifyLabels(email.id!, [label], [processedLabel]);
             } catch (error: unknown) {
               if (error instanceof Error) {
                 console.error(`Error processing ${newFilename}:`, error.message);
