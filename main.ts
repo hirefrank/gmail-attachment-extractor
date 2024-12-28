@@ -524,6 +524,12 @@ class GmailAttachmentExtractor {
 
           const message = messageResponse.data;  // Get the actual message data
 
+          // Extract and log the subject of the email
+          const headers = message.payload?.headers || [];
+          const subjectHeader = headers.find(header => header.name?.toLowerCase() === 'subject');
+          const subject = subjectHeader?.value || "No Subject";
+          console.log(`Processing email with subject: "${subject}"`);
+
           const internalDate = message.internalDate;
           if (!internalDate) {
             console.warn(`No date found for email ${email.id}, skipping`);
@@ -548,7 +554,7 @@ class GmailAttachmentExtractor {
           );
 
           if (allProcessed) {
-            const processedLabel = label.replace("* insurance claim", "processed insurance claim");
+            const processedLabel = label.replace(/^[^-]+/, "processed");
             await this.modifyLabelsWithRetry(email.id!, [label], [processedLabel]);
             console.log(`Updated labels for fully processed email ${email.id}`);
           }
