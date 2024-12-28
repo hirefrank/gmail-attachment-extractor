@@ -1,12 +1,23 @@
 # Gmail Attachment Extractor
 
-A Deno script that automatically extracts attachments from Gmail emails with specific labels and saves them to Google Drive.
+A Deno script that automatically extracts attachments from Gmail emails with specific labels, saves them to Google Drive, and manages email labels for processing status.
+
+## Features
+
+- Automatic extraction of email attachments
+- Organized storage in Google Drive with year-based folders
+- Intelligent file naming based on sender and date
+- Label management for tracking processed items
+- Duplicate prevention with processing history
+- Robust error handling and retry logic
+- Detailed logging for troubleshooting
 
 ## Prerequisites
 
 - [Deno](https://deno.land/) installed on your system
 - A Google Cloud Project with Gmail and Drive APIs enabled
 - Google Cloud OAuth 2.0 credentials
+- Gmail labels set up for processing workflow
 
 ## Setup
 
@@ -27,7 +38,7 @@ A Deno script that automatically extracts attachments from Gmail emails with spe
    - User support email
    - Developer contact information
 4. Add the following scopes under "Scopes for Google APIs":
-   - `https://www.googleapis.com/auth/gmail.readonly`
+   - `https://www.googleapis.com/auth/gmail.modify`
    - `https://www.googleapis.com/auth/drive.file`
 5. Add any test users if using External user type
 
@@ -40,7 +51,15 @@ A Deno script that automatically extracts attachments from Gmail emails with spe
    - Add `http://localhost:9000/callback` to the Authorized redirect URIs
 5. Download the client credentials
 
-### 4. Initial Authentication
+### 4. Gmail Label Setup
+
+1. Create two labels in Gmail:
+   - Source label (e.g., "* insurance claim")
+   - Processed label (e.g., "processed insurance claim")
+2. Apply the source label to emails you want to process
+3. The script will automatically switch labels after processing
+
+### 5. Initial Authentication
 
 Run the OAuth setup script:
 
@@ -53,7 +72,7 @@ This will:
 2. Open a browser for authentication
 3. Create a `config.json` file with your access tokens
 
-### 5. Running the Script
+### 6. Running the Script
 
 Extract attachments using:
 
@@ -66,15 +85,64 @@ For development with auto-reload:
 deno task dev
 ```
 
+Enable verbose logging:
+```bash
+DEBUG=1 deno task run
+```
+
+## File Organization
+
+Files are organized in Google Drive following this structure:
+```
+OutputFolder/
+├── 2023/
+│   ├── MM_SendersLastName_OriginalFilename.ext
+│   └── ...
+└── 2024/
+    ├── MM_SendersLastName_OriginalFilename.ext
+    └── ...
+```
+
+Naming convention:
+- MM: Two-digit month
+- SendersLastName: Extracted from email sender (max 20 chars)
+- OriginalFilename: Sanitized original filename (max 50 chars)
+- Total filename length is limited to 100 characters
+
+## Label Management
+
+The script handles Gmail labels in the following way:
+1. When processing messages with label "* insurance claim", it will:
+   - Remove the original label
+   - Add a "processed insurance claim" label
+2. Labels must exist before running the script
+3. Label modifications include retry logic with exponential backoff
+4. Failed label modifications are logged but won't stop processing
+
+### Label Requirements
+- Source label (e.g., "* insurance claim") must exist
+- Processed label (e.g., "processed insurance claim") must exist
+- Labels are case-sensitive
+
+## Progress Tracking
+
+The script maintains a record of processed files in `./data/uploaded_files.json`:
+- Prevents duplicate processing of attachments
+- Records are stored as `year/filename`
+- File can be manually cleared to reprocess attachments
+
 ## Project Structure
 
 ```
 .
-├── deno.json         # Task definitions and imports
-├── main.ts           # Main script for extracting attachments
-├── oauth_setup.ts    # OAuth setup and token generation
-├── .gitignore       # Git ignore rules
-└── config.json       # Generated configuration file (git-ignored)
+├── deno.json           # Task definitions and imports
+├── main.ts             # Main script for extracting attachments
+├── oauth_setup.ts      # OAuth setup and token generation
+├── .gitignore         # Git ignore rules
+├── data/              # Data directory
+│   ├── config.json    # Generated configuration file
+│   └── uploaded_files.json # Processing history
+└── temp_attachments/  # Temporary storage (auto-cleaned)
 ```
 
 ## Configuration
@@ -111,6 +179,20 @@ deno task dev
 }
 ```
 
+## Debug Logging
+
+The script provides detailed logging for troubleshooting:
+- Permission verification results
+- Label modification attempts and results
+- File download and upload progress
+- Processing status for each email
+- Error details with stack traces when available
+
+Enable verbose logging by setting the DEBUG environment variable:
+```bash
+DEBUG=1 deno task run
+```
+
 ## Common Issues
 
 ### Authentication Issues
@@ -119,19 +201,37 @@ deno task dev
 - `redirect_uri_mismatch`: Ensure `http://localhost:9000/callback` is added to Authorized redirect URIs
 - `Access denied`: Check if required scopes are added to the OAuth consent screen
 
+### Label Issues
+- `Label not found`: Verify both source and processed labels exist
+- `Label modification failed`: Check Gmail API quotas and permissions
+- `Skipped label removal`: Original label may have been removed manually
+
 ### Gmail/Drive Issues
-- `Label not found`: Verify the label exists in your Gmail account
 - `Permission denied`: Ensure both Gmail and Drive APIs are enabled
 - `Insufficient permission`: Verify OAuth consent screen has the required scopes
+- `Quota exceeded`: Check API usage and limits in Google Cloud Console
+
+### File Processing Issues
+- `Already uploaded`: Check uploaded_files.json if reprocessing is needed
+- `Invalid sender format`: Email sender format may be non-standard
+- `Filename too long`: Original filename exceeds length limits
 
 ## Security Notes
 
 - Keep your `config.json` secure and never commit it to version control
 - Use environment variables for sensitive information in production
 - Regularly rotate OAuth credentials if needed
-- The script only requests minimal required permissions:
-  - Read-only access to Gmail
+- The script requests only required permissions:
+  - Gmail modify access (for label management)
   - Limited Drive access (only files created by the app)
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
 
 ## License
 
