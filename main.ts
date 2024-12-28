@@ -103,7 +103,7 @@ class GmailAttachmentExtractor {
       .replace(/^_|_$/g, '');
 
     // Create new filename: MM_sender_name.ext
-    const newFilename = `${month}_${truncatedSender}_${truncatedOriginal}${ext}`;
+    const newFilename = `${truncatedSender}_${month}_${truncatedOriginal}${ext}`;
 
     // Final safety check - ensure total length is reasonable
     const maxLength = 100; // Conservative max length
