@@ -33,6 +33,7 @@ class GmailAttachmentExtractor {
   private gmail;
   private drive;
   private tempDir = "temp_attachments";
+  private labelCache: Map<string, string> = new Map(); // Cache for label IDs
 
   constructor(config: Config) {
     const auth = new google.auth.OAuth2(
@@ -44,7 +45,7 @@ class GmailAttachmentExtractor {
     auth.setCredentials({
       access_token: config.tokens.access_token,
       refresh_token: config.tokens.refresh_token,
-      scope: SCOPES.join(' '), // Include scopes in token
+      scope: SCOPES.join(' '),
       token_type: 'Bearer'
     });
 
@@ -65,6 +66,15 @@ class GmailAttachmentExtractor {
       });
       console.log('Drive permissions verified:', driveTest.data.files?.length, 'files found');
 
+      // Cache all labels for future use
+      if (gmailTest.data.labels) {
+        gmailTest.data.labels.forEach(label => {
+          if (label.name && label.id) {
+            this.labelCache.set(label.name, label.id);
+          }
+        });
+      }
+
       console.log('All permissions verified successfully');
     } catch (error: unknown) {
       console.error('Permission verification failed:', error);
@@ -74,6 +84,101 @@ class GmailAttachmentExtractor {
       }
       const errorMessage = error instanceof Error ? error.message : String(error);
       throw new Error(`Permission verification failed: ${errorMessage}`);
+    }
+  }
+
+  private async getLabelId(labelName: string): Promise<string> {
+    // Check cache first
+    const cachedId = this.labelCache.get(labelName);
+    if (cachedId) return cachedId;
+
+    // If not in cache, refresh labels
+    const response = await this.gmail.users.labels.list({ userId: 'me' });
+    const labels = response.data.labels || [];
+
+    // Update cache
+    labels.forEach(label => {
+      if (label.name && label.id) {
+        this.labelCache.set(label.name, label.id);
+      }
+    });
+
+    const labelId = this.labelCache.get(labelName);
+    if (!labelId) {
+      throw new Error(`Label "${labelName}" not found`);
+    }
+
+    return labelId;
+  }
+
+  private async verifyLabel(messageId: string, labelId: string): Promise<boolean> {
+    const message = await this.gmail.users.messages.get({
+      userId: 'me',
+      id: messageId,
+    });
+    return message.data.labelIds?.includes(labelId) || false;
+  }
+
+  private async modifyLabelsWithRetry(
+    messageId: string,
+    labelsToRemove: string[],
+    labelsToAdd: string[],
+    maxRetries = 3
+  ): Promise<void> {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        // Get label IDs
+        const [removeIds, addIds] = await Promise.all([
+          Promise.all(labelsToRemove.map(label => this.getLabelId(label))),
+          Promise.all(labelsToAdd.map(label => this.getLabelId(label)))
+        ]);
+
+        // Verify original labels exist before trying to remove them
+        for (const [label, id] of labelsToRemove.map((l, i) => [l, removeIds[i]])) {
+          const exists = await this.verifyLabel(messageId, id);
+          if (!exists) {
+            console.warn(`Label "${label}" not found on message ${messageId}, skipping removal`);
+            removeIds.splice(removeIds.indexOf(id), 1);
+          }
+        }
+
+        console.log(`Attempt ${attempt} - Modifying labels for message ${messageId}:`, {
+          removing: labelsToRemove,
+          adding: labelsToAdd
+        });
+
+        const _result = await this.gmail.users.messages.modify({
+          userId: 'me',
+          id: messageId,
+          requestBody: {
+            removeLabelIds: removeIds,
+            addLabelIds: addIds,
+          },
+        });
+
+        // Verify the modification
+        const updatedMessage = await this.gmail.users.messages.get({
+          userId: 'me',
+          id: messageId,
+        });
+
+        const success = {
+          removedAll: removeIds.every(id => !updatedMessage.data.labelIds?.includes(id)),
+          addedAll: addIds.every(id => updatedMessage.data.labelIds?.includes(id)),
+        };
+
+        if (!success.removedAll || !success.addedAll) {
+          throw new Error(`Label modification verification failed: ${JSON.stringify(success)}`);
+        }
+
+        console.log(`Successfully modified labels for message ${messageId}`);
+        return;
+      } catch (error) {
+        console.error(`Attempt ${attempt} failed:`, error);
+        if (attempt === maxRetries) throw error;
+        // Exponential backoff
+        await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt - 1)));
+      }
     }
   }
 
@@ -107,7 +212,6 @@ class GmailAttachmentExtractor {
   }
 
   private formatSenderName(name: string): string {
-    // Remove special characters and spaces, keep alphanumeric and dots
     return name
       .replace(/[^a-zA-Z0-9.-]/g, '_')
       .replace(/_{2,}/g, '_')  // Replace multiple underscores with single
@@ -116,32 +220,26 @@ class GmailAttachmentExtractor {
   }
 
   private formatDate(date: Date): string {
-    const month = (date.getMonth() + 1).toString().padStart(2, '0');
-    return month;
+    return (date.getMonth() + 1).toString().padStart(2, '0');
   }
 
   private formatFilename(originalFilename: string, sender: string, month: string): string {
-    // Get the file extension
     const lastDot = originalFilename.lastIndexOf('.');
     const ext = lastDot > -1 ? originalFilename.slice(lastDot).toLowerCase() : '';
     const nameWithoutExt = lastDot > -1 ? originalFilename.slice(0, lastDot) : originalFilename;
 
-    // Truncate each component to reasonable lengths
-    const truncatedSender = sender.substring(0, 20);  // Max 20 chars for sender
+    const truncatedSender = sender.substring(0, 20);
     const truncatedOriginal = nameWithoutExt
-      .substring(0, 50)  // Max 50 chars for original name
+      .substring(0, 50)
       .replace(/[^a-zA-Z0-9.-]/g, '_')
       .replace(/_{2,}/g, '_')
       .replace(/^_|_$/g, '');
 
-    // Create new filename: MM_sender_name.ext
     const newFilename = `${truncatedSender}_${month}_${truncatedOriginal}${ext}`;
 
-    // Final safety check - ensure total length is reasonable
-    const maxLength = 100; // Conservative max length
+    const maxLength = 100;
     if (newFilename.length > maxLength) {
-      // If too long, truncate the original name portion while preserving extension
-      const availableSpace = maxLength - (month.length + truncatedSender.length + ext.length + 2); // 2 for underscores
+      const availableSpace = maxLength - (month.length + truncatedSender.length + ext.length + 2);
       const truncatedName = truncatedOriginal.substring(0, Math.max(0, availableSpace));
       return `${month}_${truncatedSender}_${truncatedName}${ext}`;
     }
@@ -303,7 +401,7 @@ class GmailAttachmentExtractor {
       console.log(`Successfully uploaded ${filename} to Drive`);
     } catch (error: unknown) {
       console.error('Error uploading to Drive:', error);
-      if (error && typeof error === 'object' && 'response' in error &&
+      if (error instanceof Error && 'response' in error &&
           error.response && typeof error.response === 'object' && 'data' in error.response) {
         console.error('Error details:', error.response.data);
       }
@@ -334,57 +432,8 @@ class GmailAttachmentExtractor {
     }
   }
 
-  private async modifyLabels(messageId: string, labelsToRemove: string[], labelsToAdd: string[]): Promise<void> {
-    try {
-      // First, get and log available labels
-      const labelsResponse = await this.gmail.users.labels.list({
-        userId: "me"
-      });
-      //console.log("Available labels:", labelsResponse.data.labels?.map(l => ({name: l.name, id: l.id})));
-
-      // Get label IDs for the labels we want to add/remove
-      const labelMap = new Map(labelsResponse.data.labels?.map(l => [l.name, l.id]));
-
-      const addLabelIds = labelsToAdd.map(label => {
-        const id = labelMap.get(label);
-        if (!id) console.warn(`Warning: Label "${label}" not found`);
-        return id;
-      }).filter((id): id is string => id !== undefined);
-
-      const removeLabelIds = labelsToRemove.map(label => {
-        const id = labelMap.get(label);
-        if (!id) console.warn(`Warning: Label "${label}" not found`);
-        return id;
-      }).filter((id): id is string => id !== undefined);
-
-      //console.log(`Attempting to modify labels - Remove: ${JSON.stringify(removeLabelIds)}, Add: ${JSON.stringify(addLabelIds)}`);
-
-      const _result = await this.gmail.users.messages.modify({
-        userId: "me",
-        id: messageId,
-        requestBody: {
-          removeLabelIds: removeLabelIds,
-          addLabelIds: addLabelIds,
-        },
-      });
-
-      //console.log(`Modified labels for message: ${messageId}`, {
-      //  removed: removeLabelIds,
-      //  added: addLabelIds,
-      //  response: result.data
-      //});
-    } catch (error) {
-      console.error(`Error modifying labels for message ${messageId}:`, error);
-      if (error instanceof Error && 'response' in error && typeof error.response === 'object' && error.response && 'data' in error.response) {
-        console.error('Error details:', error.response.data);
-      }
-      throw error;
-    }
-  }
-
   public async extractAttachments(label: string, outputFolder: string): Promise<void> {
     try {
-      // Verify permissions before starting
       await this.verifyPermissions();
 
       await ensureDir(this.tempDir);
@@ -420,7 +469,6 @@ class GmailAttachmentExtractor {
         const year = emailDate.getFullYear().toString();
         const month = this.formatDate(emailDate);
 
-        // Get sender information
         const { lastName } = this.getSenderInfo(message.data.payload?.headers);
         const senderName = this.formatSenderName(lastName);
 
@@ -462,16 +510,7 @@ class GmailAttachmentExtractor {
 
               // Use the existing "processed insurance claim" label format
               const processedLabel = label.replace("* insurance claim", "processed insurance claim");
-
-              // Double check the label exists
-              const labels = await this.gmail.users.labels.list({ userId: "me" });
-              const processedLabelId = labels.data.labels?.find(l => l.name === processedLabel)?.id;
-
-              if (!processedLabelId) {
-                throw new Error(`Expected label "${processedLabel}" not found. Please create it in Gmail first.`);
-              }
-
-              await this.modifyLabels(email.id!, [label], [processedLabel]);
+              await this.modifyLabelsWithRetry(email.id!, [label], [processedLabel]);
             } catch (error: unknown) {
               if (error instanceof Error) {
                 console.error(`Error processing ${newFilename}:`, error.message);
@@ -497,7 +536,7 @@ class GmailAttachmentExtractor {
 
       console.log("Finished extracting attachments!");
     } catch (error: unknown) {
-      console.error("Error:", error);
+      console.error("Error in extractAttachments:", error);
       throw error;
     }
   }
@@ -516,25 +555,6 @@ const loadConfig = async (): Promise<Config> => {
     console.error("Error loading config.json. Have you run the OAuth setup script?");
     throw error;
   }
-};
-
-// Get configuration values with logging
-const getConfigValue = (
-  cmdArg: string | undefined,
-  configValue: string | undefined,
-  defaultValue: string,
-  valueName: string
-): string => {
-  if (cmdArg) {
-    console.log(`Using ${valueName} from command line: ${cmdArg}`);
-    return cmdArg;
-  }
-  if (configValue) {
-    console.log(`Using ${valueName} from config.json: ${configValue}`);
-    return configValue;
-  }
-  console.log(`Using default ${valueName}: ${defaultValue}`);
-  return defaultValue;
 };
 
 // Initialize uploaded_files.json if it doesn't exist
@@ -575,29 +595,14 @@ export const main = async () => {
 
     const config = await loadConfig();
 
-    const label = getConfigValue(
-      Deno.args[0],
-      config.label,
-      DEFAULT_CONFIG.label,
-      'label'
-    );
-
-    const outputFolder = getConfigValue(
-      Deno.args[1],
-      config.outputFolder,
-      DEFAULT_CONFIG.outputFolder,
-      'output folder'
-    );
-
     const extractor = new GmailAttachmentExtractor(config);
-    await extractor.extractAttachments(label, outputFolder);
+    await extractor.extractAttachments(config.label || DEFAULT_CONFIG.label, config.outputFolder || DEFAULT_CONFIG.outputFolder);
   } catch (error) {
-    console.error("\nError:", error);
-    Deno.exit(1);
+    console.error("Error in main:", error);
+    throw error;
   }
 };
 
-// only executed if invoked from command line
 if (import.meta.main) {
   await main();
 }
