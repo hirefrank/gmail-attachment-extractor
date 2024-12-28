@@ -29,6 +29,12 @@ interface Config {
   outputFolder?: string;
 }
 
+interface AttachmentInfo {
+  filename: string;
+  attachmentId: string;
+  mimeType: string;
+}
+
 class GmailAttachmentExtractor {
   private gmail;
   private drive;
@@ -432,6 +438,62 @@ class GmailAttachmentExtractor {
     }
   }
 
+  private async processEmail(
+    email: gmail_v1.Schema$Message,
+    folderId: string,
+    year: string,
+    month: string,
+    senderName: string
+  ): Promise<boolean> {
+    let processedCount = 0;
+    let errorCount = 0;
+    const parts = email.payload?.parts || [];
+
+    for (const part of parts) {
+      if (part.filename && part.body?.attachmentId) {
+        const newFilename = this.formatFilename(part.filename, senderName, month);
+
+        if (await this.isFileUploaded(`${year}/${newFilename}`)) {
+          console.log(`Skipping already uploaded file: ${year}/${newFilename}`);
+          processedCount++;
+          continue;
+        }
+
+        try {
+          console.log(`Processing: ${newFilename}`);
+
+          const filePath = await this.downloadAttachment(
+            email.id!,
+            part.body.attachmentId,
+            newFilename
+          );
+          console.log(`Downloaded to: ${filePath}`);
+
+          await this.uploadToDrive(
+            filePath,
+            newFilename,
+            part.mimeType || "application/octet-stream",
+            folderId,
+            year
+          );
+          console.log(`Uploaded: ${newFilename} to year folder: ${year}`);
+
+          await this.markFileAsUploaded(`${year}/${newFilename}`);
+          await Deno.remove(filePath);
+
+          processedCount++;
+        } catch (error: unknown) {
+          errorCount++;
+          console.error(`Error processing ${newFilename}:`, error instanceof Error ? error.message : String(error));
+        }
+      }
+    }
+
+    // Return true if all attachments were processed successfully (no errors)
+    const totalAttachments = parts.filter(part => part.filename && part.body?.attachmentId).length;
+    return totalAttachments > 0 && processedCount === totalAttachments && errorCount === 0;
+  }
+
   public async extractAttachments(label: string, outputFolder: string): Promise<void> {
     try {
       await this.verifyPermissions();
@@ -454,72 +516,45 @@ class GmailAttachmentExtractor {
       console.log(`Found ${emails.data.messages.length} emails to process`);
 
       for (const email of emails.data.messages) {
-        const message = await this.gmail.users.messages.get({
-          userId: "me",
-          id: email.id!,
-        });
+        try {
+          const messageResponse = await this.gmail.users.messages.get({
+            userId: "me",
+            id: email.id!,
+          });
 
-        const internalDate = message.data.internalDate;
-        if (!internalDate) {
-          console.warn(`No date found for email ${email.id}, skipping`);
-          continue;
-        }
+          const message = messageResponse.data;  // Get the actual message data
 
-        const emailDate = new Date(parseInt(internalDate));
-        const year = emailDate.getFullYear().toString();
-        const month = this.formatDate(emailDate);
-
-        const { lastName } = this.getSenderInfo(message.data.payload?.headers);
-        const senderName = this.formatSenderName(lastName);
-
-        console.log(`Processing email from ${senderName} (${month}/${year})`);
-
-        const parts = message.data.payload?.parts || [];
-
-        for (const part of parts) {
-          if (part.filename && part.body?.attachmentId) {
-            const newFilename = this.formatFilename(part.filename, senderName, month);
-
-            if (await this.isFileUploaded(`${year}/${newFilename}`)) {
-              console.log(`Skipping already uploaded file: ${year}/${newFilename}`);
-              continue;
-            }
-
-            try {
-              console.log(`Processing: ${newFilename}`);
-
-              const filePath = await this.downloadAttachment(
-                email.id!,
-                part.body.attachmentId,
-                newFilename
-              );
-              console.log(`Downloaded to: ${filePath}`);
-
-              await this.uploadToDrive(
-                filePath,
-                newFilename,
-                part.mimeType || "application/octet-stream",
-                folderId,
-                year
-              );
-              console.log(`Uploaded: ${newFilename} to year folder: ${year}`);
-
-              await this.markFileAsUploaded(`${year}/${newFilename}`);
-
-              await Deno.remove(filePath);
-
-              // Use the existing "processed insurance claim" label format
-              const processedLabel = label.replace("* insurance claim", "processed insurance claim");
-              await this.modifyLabelsWithRetry(email.id!, [label], [processedLabel]);
-            } catch (error: unknown) {
-              if (error instanceof Error) {
-                console.error(`Error processing ${newFilename}:`, error.message);
-              } else {
-                console.error(`Error processing ${newFilename}:`, String(error));
-              }
-              continue;
-            }
+          const internalDate = message.internalDate;
+          if (!internalDate) {
+            console.warn(`No date found for email ${email.id}, skipping`);
+            continue;
           }
+
+          const emailDate = new Date(parseInt(internalDate));
+          const year = emailDate.getFullYear().toString();
+          const month = this.formatDate(emailDate);
+          const { lastName } = this.getSenderInfo(message.payload?.headers);
+          const senderName = this.formatSenderName(lastName);
+
+          console.log(`Processing email from ${senderName} (${month}/${year})`);
+
+          // Process the email and check if all attachments were handled
+          const allProcessed = await this.processEmail(
+            message,  // Pass the message data, not the response
+            folderId,
+            year,
+            month,
+            senderName
+          );
+
+          if (allProcessed) {
+            const processedLabel = label.replace("* insurance claim", "processed insurance claim");
+            await this.modifyLabelsWithRetry(email.id!, [label], [processedLabel]);
+            console.log(`Updated labels for fully processed email ${email.id}`);
+          }
+        } catch (error: unknown) {
+          console.error(`Error processing email ${email.id}:`, error instanceof Error ? error.message : String(error));
+          continue; // Continue with next email even if this one fails
         }
       }
 
@@ -527,11 +562,7 @@ class GmailAttachmentExtractor {
         await Deno.remove(this.tempDir, { recursive: true });
         console.log("Cleaned up temporary directory");
       } catch (error: unknown) {
-        if (error instanceof Error) {
-          console.error("Error cleaning up temp directory:", error.message);
-        } else {
-          console.error("Error cleaning up temp directory:", String(error));
-        }
+        console.error("Error cleaning up temp directory:", error instanceof Error ? error.message : String(error));
       }
 
       console.log("Finished extracting attachments!");
