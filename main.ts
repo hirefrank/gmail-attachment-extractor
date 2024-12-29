@@ -498,107 +498,181 @@ class GmailAttachmentExtractor {
     return totalAttachments > 0 && processedCount === totalAttachments && errorCount === 0;
   }
 
+  private async checkEmailLabels(messageId: string, preprocessLabelId: string, processedLabelId: string): Promise<boolean> {
+    const message = await this.gmail.users.messages.get({
+      userId: 'me',
+      id: messageId,
+    });
+
+    const hasPreprocess = message.data.labelIds?.includes(preprocessLabelId) || false;
+    const hasProcessed = message.data.labelIds?.includes(processedLabelId) || false;
+
+    if (hasPreprocess && hasProcessed) {
+      console.log(`Warning: Email ${messageId} has both preprocess and processed labels`);
+      // Optionally, fix it here by removing the preprocess label
+      try {
+        await this.gmail.users.messages.modify({
+          userId: 'me',
+          id: messageId,
+          requestBody: {
+            removeLabelIds: [preprocessLabelId],
+          }
+        });
+        console.log(`Cleaned up duplicate labels for email ${messageId}`);
+      } catch (error) {
+        console.error(`Failed to clean up duplicate labels for email ${messageId}:`, error);
+      }
+    }
+
+    return hasPreprocess;
+  }
+
   public async extractAttachments(config: Config): Promise<void> {
     const { preprocess, processed } = config.labels;
     const outputFolder = config.outputFolder;
 
     try {
+      await this.verifyPermissions();
+
+      // Get label IDs up front and verify they exist
+      const preprocessLabelId = await this.getLabelId(preprocess);
+      const processedLabelId = await this.getLabelId(processed);
+      console.log(`Verified labels - Preprocess: "${preprocess}" (${preprocessLabelId}), Processed: "${processed}" (${processedLabelId})`);
+
       await ensureDir(this.tempDir);
       console.log(`Created temporary directory: ${this.tempDir}`);
 
       const folderId = await this.createFolderInDrive(outputFolder!);
 
+      // Get all emails with the preprocess label using label ID
       const emails = await this.gmail.users.messages.list({
         userId: "me",
-        q: `has:attachment label:${preprocess}`,
+        labelIds: [preprocessLabelId],
       });
 
       if (!emails.data.messages) {
-        console.log(`No emails found with label: ${preprocess}`);
+        console.log(`No emails found with preprocess label ID: ${preprocessLabelId}`);
         return;
       }
 
-      console.log(`Found ${emails.data.messages.length} emails to process`);
+      // Log the total number of emails found
+      console.log(`Found ${emails.data.messages.length} emails with preprocess label`);
 
+      // Process each email
       for (const email of emails.data.messages) {
-        const message = await this.gmail.users.messages.get({
-          userId: "me",
-          id: email.id!,
-        });
+        try {
+          // Get full message details
+          const message = await this.gmail.users.messages.get({
+            userId: "me",
+            id: email.id!,
+          });
 
-        // Extract and log the subject of the email
-        const headers = message.data.payload?.headers || [];
-        const subjectHeader = headers.find(header => header.name?.toLowerCase() === 'subject');
-        const subject = subjectHeader?.value || "No Subject";
-        console.log(`Processing email with subject: "${subject}"`);
+          // Extract subject first for better logging
+          const headers = message.data.payload?.headers || [];
+          const subjectHeader = headers.find(header => header.name?.toLowerCase() === 'subject');
+          const subject = subjectHeader?.value || "No Subject";
 
-        const internalDate = message.data.internalDate;
-        if (!internalDate) {
-          console.warn(`No date found for email ${email.id}, skipping`);
-          continue;
-        }
+          console.log(`\nProcessing email: "${subject}" (${email.id})`);
 
-        const emailDate = new Date(parseInt(internalDate));
-        const year = emailDate.getFullYear().toString();
-        const month = this.formatDate(emailDate);
+          // Check if this email has attachments
+          if (!message.data.payload?.parts?.some(part => part.filename && part.body?.attachmentId)) {
+            console.log(`Email "${subject}" has no attachments, but will continue processing`);
+          }
 
-        // Get sender information
-        const { lastName } = this.getSenderInfo(message.data.payload?.headers);
-        const senderName = this.formatSenderName(lastName);
+          const hasProcessed = message.data.labelIds?.includes(processedLabelId) || false;
 
-        console.log(`Processing email from ${senderName} (${month}/${year})`);
-
-        const parts = message.data.payload?.parts || [];
-
-        for (const part of parts) {
-          if (part.filename && part.body?.attachmentId) {
-            const newFilename = this.formatFilename(part.filename, senderName, month);
-
-            if (await this.isFileUploaded(`${year}/${newFilename}`)) {
-              console.log(`Skipping already uploaded file: ${year}/${newFilename}`);
-              continue;
-            }
-
+          if (hasProcessed) {
+            // If it already has the processed label, remove the preprocess label
             try {
-              console.log(`Processing: ${newFilename}`);
-
-              const filePath = await this.downloadAttachment(
-                email.id!,
-                part.body.attachmentId,
-                newFilename
-              );
-              console.log(`Downloaded to: ${filePath}`);
-
-              await this.uploadToDrive(
-                filePath,
-                newFilename,
-                part.mimeType || "application/octet-stream",
-                folderId,
-                year
-              );
-              console.log(`Uploaded: ${newFilename} to year folder: ${year}`);
-
-              await this.markFileAsUploaded(`${year}/${newFilename}`);
-
-              await Deno.remove(filePath);
-              // Use the processed label from config
               await this.gmail.users.messages.modify({
                 userId: 'me',
                 id: email.id!,
                 requestBody: {
-                  addLabelIds: [processed],
-                  removeLabelIds: [preprocess]
+                  removeLabelIds: [preprocessLabelId],
                 }
               });
-            } catch (error: unknown) {
-              if (error instanceof Error) {
-                console.error(`Error processing ${newFilename}:`, error.message);
-              } else {
-                console.error(`Error processing ${newFilename}:`, String(error));
-              }
-              continue;
+              console.log(`Cleaned up duplicate labels for email "${subject}"`);
+              continue; // Skip processing this email
+            } catch (error) {
+              console.error(`Failed to clean up duplicate labels for email "${subject}":`, error);
             }
           }
+
+          const internalDate = message.data.internalDate;
+          if (!internalDate) {
+            console.warn(`No date found for email "${subject}", skipping`);
+            continue;
+          }
+
+          const emailDate = new Date(parseInt(internalDate));
+          const year = emailDate.getFullYear().toString();
+          const month = this.formatDate(emailDate);
+
+          // Get sender information
+          const { lastName } = this.getSenderInfo(message.data.payload?.headers);
+          const senderName = this.formatSenderName(lastName);
+
+          console.log(`Processing attachments from "${subject}" - ${senderName} (${month}/${year})`);
+
+          const parts = message.data.payload?.parts || [];
+
+          // Process the email and check if all attachments were handled
+          const hasAttachments = parts.some(part => part.filename && part.body?.attachmentId);
+          const allProcessed = !hasAttachments || await this.processEmail(
+            message.data,
+            folderId,
+            year,
+            month,
+            senderName
+          );
+
+          // Update labels if there are no attachments or all were processed
+          if (allProcessed) {
+            try {
+              await this.gmail.users.messages.modify({
+                userId: 'me',
+                id: email.id!,
+                requestBody: {
+                  removeLabelIds: [preprocessLabelId],
+                  addLabelIds: [processedLabelId]
+                }
+              });
+
+              // Verify the label modification
+              const verifyMessage = await this.gmail.users.messages.get({
+                userId: 'me',
+                id: email.id!,
+              });
+
+              const finalLabels = verifyMessage.data.labelIds || [];
+              if (!finalLabels.includes(processedLabelId)) {
+                console.error(`Failed to add processed label to email "${subject}"`);
+              }
+              if (finalLabels.includes(preprocessLabelId)) {
+                console.error(`Failed to remove preprocess label from email "${subject}"`);
+              }
+
+              if (finalLabels.includes(processedLabelId) && !finalLabels.includes(preprocessLabelId)) {
+                console.log(`Successfully updated labels for email "${subject}"`);
+              } else {
+                console.log(`Label update verification failed for email "${subject}". Current labels:`, finalLabels);
+              }
+
+            } catch (error) {
+              console.error(`Error modifying labels for email "${subject}":`, error);
+              if (error instanceof Error && 'response' in error) {
+                const errorWithResponse = error as { response: { data: unknown } };
+                console.error('Label modification error details:', errorWithResponse.response.data);
+              }
+            }
+          } else {
+            console.log(`Not all attachments were processed successfully for email "${subject}", skipping label update`);
+          }
+
+        } catch (error: unknown) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          console.error(`Error processing email ${email.id}: ${errorMessage}`);
+          continue; // Continue with next email even if this one fails
         }
       }
 
@@ -606,17 +680,29 @@ class GmailAttachmentExtractor {
         await Deno.remove(this.tempDir, { recursive: true });
         console.log("Cleaned up temporary directory");
       } catch (error: unknown) {
-        if (error instanceof Error) {
-          console.error("Error cleaning up temp directory:", error.message);
-        } else {
-          console.error("Error cleaning up temp directory:", String(error));
-        }
+        console.error("Error cleaning up temp directory:", error instanceof Error ? error.message : String(error));
       }
 
       console.log("Finished extracting attachments!");
     } catch (error: unknown) {
-      console.error("Error:", error);
+      console.error("Error in extractAttachments:", error);
       throw error;
+    }
+  }
+
+  public async listAllLabels(): Promise<void> {
+    try {
+      const response = await this.gmail.users.labels.list({
+        userId: "me",
+      });
+
+      const labels = response.data.labels || [];
+      console.log("Labels found in your Gmail account:");
+      labels.forEach(label => {
+        console.log(`- ${label.name}`);
+      });
+    } catch (error) {
+      console.error("Error fetching labels:", error);
     }
   }
 }
@@ -675,10 +761,14 @@ export const main = async () => {
     const config = await loadConfig();
 
     const extractor = new GmailAttachmentExtractor(config);
+
+    // List all labels
+    //await extractor.listAllLabels();
+
     await extractor.extractAttachments(config);
   } catch (error) {
-    console.error("Error in main:", error);
-    throw error;
+    console.error("\nError:", error);
+    Deno.exit(1);
   }
 };
 
