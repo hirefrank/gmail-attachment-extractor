@@ -9,10 +9,10 @@ const SCOPES = [
   'https://www.googleapis.com/auth/drive.file'     // For uploading to Drive
 ] as const;
 
-// Default configuration values
-const DEFAULT_CONFIG = {
-  label: "Work",
-  outputFolder: "Gmail Attachments"
+// At the top with other constants
+const LABELS = {
+  "preprocess": "insurance claims/todo",
+  "processed": "insurance claims/processed"
 } as const;
 
 interface Config {
@@ -24,12 +24,6 @@ interface Config {
   tokens: {
     access_token: string;
     refresh_token: string;
-  };
-  label?: string;
-  outputFolder?: string;
-  labels: {
-    preprocess: string;
-    processed: string;
   };
 }
 
@@ -527,22 +521,19 @@ class GmailAttachmentExtractor {
     return hasPreprocess;
   }
 
-  public async extractAttachments(config: Config): Promise<void> {
-    const { preprocess, processed } = config.labels;
-    const outputFolder = config.outputFolder;
-
+  public async extractAttachments(_config: Config): Promise<void> {
     try {
       await this.verifyPermissions();
 
-      // Get label IDs up front and verify they exist
-      const preprocessLabelId = await this.getLabelId(preprocess);
-      const processedLabelId = await this.getLabelId(processed);
-      console.log(`Verified labels - Preprocess: "${preprocess}" (${preprocessLabelId}), Processed: "${processed}" (${processedLabelId})`);
+      // Get label ID for the input and output labels
+      const preprocessLabelId = await this.getLabelId(LABELS.preprocess);
+      const processedLabelId = await this.getLabelId(LABELS.processed);
+      console.log(`Verified labels - Preprocess: "${LABELS.preprocess}" (${preprocessLabelId}), Output: "${LABELS.processed}" (${processedLabelId})`);
 
       await ensureDir(this.tempDir);
       console.log(`Created temporary directory: ${this.tempDir}`);
 
-      const folderId = await this.createFolderInDrive(outputFolder!);
+      const folderId = await this.createFolderInDrive(LABELS.processed);
 
       // Get all emails with the preprocess label using label ID
       const emails = await this.gmail.users.messages.list({
@@ -707,14 +698,12 @@ class GmailAttachmentExtractor {
   }
 }
 
-// Load config from file
+// Update the loadConfig function
 const loadConfig = async (): Promise<Config> => {
   try {
     const configText = await Deno.readTextFile("./data/config.json");
     const config: Config = JSON.parse(configText);
     console.log('\nConfiguration loaded successfully');
-    if (config.label) console.log(`Found label in config: ${config.label}`);
-    if (config.outputFolder) console.log(`Found output folder in config: ${config.outputFolder}`);
     return config;
   } catch (error) {
     console.error("Error loading config.json. Have you run the OAuth setup script?");
@@ -722,49 +711,25 @@ const loadConfig = async (): Promise<Config> => {
   }
 };
 
-// Initialize uploaded_files.json if it doesn't exist
-const initializeUploadedFiles = async () => {
-  try {
-    await Deno.stat("./data/uploaded_files.json");
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) {
-      await Deno.writeTextFile("./data/uploaded_files.json", JSON.stringify([]));
-      console.log("Initialized uploaded_files.json with an empty array");
-    } else {
-      console.error("Error checking uploaded_files.json:", error);
-    }
-  }
-};
-
-// Initialize config.json if it doesn't exist
-const initializeConfig = async () => {
-  try {
-    await Deno.stat("./data/config.json");
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) {
-      await Deno.writeTextFile("./data/config.json", JSON.stringify(DEFAULT_CONFIG, null, 2));
-      console.log("Initialized config.json with default values");
-    } else {
-      console.error("Error checking config.json:", error);
-    }
-  }
-};
-
-// Main execution
+// Update the main function
 export const main = async () => {
   try {
     console.log('\nStarting Gmail Attachment Extractor');
 
-    await initializeConfig();
-    await initializeUploadedFiles();
+    // Initialize uploaded_files.json if it doesn't exist
+    try {
+      await Deno.stat("./data/uploaded_files.json");
+    } catch (error) {
+      if (error instanceof Deno.errors.NotFound) {
+        await Deno.writeTextFile("./data/uploaded_files.json", JSON.stringify([]));
+        console.log("Initialized uploaded_files.json with an empty array");
+      } else {
+        throw error;
+      }
+    }
 
     const config = await loadConfig();
-
     const extractor = new GmailAttachmentExtractor(config);
-
-    // List all labels
-    //await extractor.listAllLabels();
-
     await extractor.extractAttachments(config);
   } catch (error) {
     console.error("\nError:", error);
