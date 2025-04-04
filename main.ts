@@ -2,6 +2,8 @@ import { google } from "googleapis";
 import type { gmail_v1 } from "googleapis";
 import { ensureDir } from "https://deno.land/std@0.220.1/fs/ensure_dir.ts";
 import { join } from "https://deno.land/std@0.220.1/path/mod.ts";
+import { loadConfigSecurely, saveConfigSecurely } from "./token_security.ts";
+
 
 // OAuth scopes required for the application
 const SCOPES = [
@@ -24,6 +26,8 @@ interface Config {
   tokens: {
     access_token: string;
     refresh_token: string;
+    expiry_date?: number; // Optional timestamp when the token expires
+    needsReauth?: boolean; // Flag to indicate if reauth is needed
   };
 }
 
@@ -34,31 +38,155 @@ interface AttachmentInfo {
 }
 
 class GmailAttachmentExtractor {
+  private auth;
   private gmail;
   private drive;
   private tempDir = "temp_attachments";
   private labelCache: Map<string, string> = new Map(); // Cache for label IDs
 
-  constructor(config: Config) {
-    const auth = new google.auth.OAuth2(
+  constructor(private config: Config) {
+    // Create and store the auth client
+    this.auth = new google.auth.OAuth2(
       config.credentials.client_id,
       config.credentials.client_secret,
       config.credentials.redirect_uri
     );
 
-    auth.setCredentials({
+    // Set up credentials
+    this.auth.setCredentials({
       access_token: config.tokens.access_token,
       refresh_token: config.tokens.refresh_token,
       scope: SCOPES.join(' '),
-      token_type: 'Bearer'
+      token_type: 'Bearer',
+      expiry_date: config.tokens.expiry_date
     });
 
-    this.gmail = google.gmail({ version: "v1", auth });
-    this.drive = google.drive({ version: "v3", auth });
+    // Set up token refresh handler
+    this.auth.on('tokens', async (tokens) => {
+      if (tokens.access_token) {
+        console.log('New access token received, updating configuration...');
+
+        // Only update the access token, preserve the refresh token
+        this.config.tokens.access_token = tokens.access_token;
+
+        // Update expiry date if provided
+        if (tokens.expiry_date) {
+          this.config.tokens.expiry_date = tokens.expiry_date;
+        }
+
+        // Save the updated tokens to config.json
+        await this.saveUpdatedConfig();
+      }
+    });
+
+    this.gmail = google.gmail({ version: "v1", auth: this.auth });
+    this.drive = google.drive({ version: "v3", auth: this.auth });
+  }
+
+  private async saveUpdatedConfig(): Promise<void> {
+    try {
+      // Try secure storage first
+      try {
+        await saveConfigSecurely(this.config);
+        console.log('Updated tokens saved securely');
+      } catch (secureError) {
+        console.warn('Could not save securely, falling back to plaintext:', secureError);
+
+        // Fall back to plaintext
+        await Deno.writeTextFile(
+          './data/config.json',
+          JSON.stringify(this.config, null, 2)
+        );
+        console.log('Updated tokens saved to plaintext config.json');
+      }
+    } catch (error) {
+      console.error('Error saving updated tokens:', error);
+    }
+  }
+
+  private async ensureTokenValidity(): Promise<void> {
+    try {
+      // Check if the token is expired or will expire soon
+      const expiry = this.config.tokens.expiry_date;
+      const isExpired = expiry && Date.now() >= expiry - 5 * 60 * 1000;
+
+      if (isExpired) {
+        console.log('Access token is expired or will expire soon, refreshing...');
+
+        // Use the stored auth client instead of accessing through gmail.context
+        const { token } = await this.auth.getAccessToken();
+
+        if (token && token !== this.config.tokens.access_token) {
+          this.config.tokens.access_token = token;
+          await this.saveUpdatedConfig();
+        }
+      }
+    } catch (error) {
+      console.error('Error refreshing token:', error);
+      await this.handleTokenRefreshError(error);
+      throw new Error('Token refresh failed. Please re-authenticate using the setup script.');
+    }
+  }
+
+  private async handleTokenRefreshError(error: unknown): Promise<boolean> {
+    console.error('Token refresh error:', error);
+
+    // If refresh token is invalid, we need to re-authenticate
+    if (error instanceof Error &&
+        (error.message.includes('invalid_grant') ||
+         error.message.includes('Token has been expired or revoked'))) {
+
+      console.error('Refresh token is invalid or revoked. Requires re-authentication.');
+
+      // Set a flag in config to indicate re-auth is needed
+      this.config.tokens.needsReauth = true;
+      await this.saveUpdatedConfig();
+
+      // Option 2: For automated systems, consider sending an email notification
+      // await this.sendNotification('Authentication required',
+      //   'The Gmail Attachment Extractor requires re-authentication. Please run the setup script.');
+
+      return false;
+    }
+
+    // For other errors, we might want to retry
+    return true;
+  }
+
+  private async checkNeedsReauth(): Promise<boolean> {
+    try {
+      // Read the config file to get the latest status
+      const configText = await Deno.readTextFile("./data/config.json");
+      const config = JSON.parse(configText);
+
+      return config.tokens.needsReauth === true;
+    } catch (error) {
+      console.error('Error checking reauth status:', error);
+      return false;
+    }
+  }
+
+  private async refreshTokenProactively(): Promise<void> {
+    try {
+      // Use the stored auth client
+      const { token } = await this.auth.getAccessToken();
+
+      if (token && token !== this.config.tokens.access_token) {
+        this.config.tokens.access_token = token;
+        await this.saveUpdatedConfig();
+        console.log('Proactively refreshed access token');
+      }
+    } catch (error) {
+      console.error('Error during proactive token refresh:', error);
+      await this.handleTokenRefreshError(error);
+    }
   }
 
   private async verifyPermissions(): Promise<void> {
     try {
+      // Ensure token is valid before making API calls
+      await this.ensureTokenValidity();
+
       console.log('Verifying Gmail permissions...');
       const gmailTest = await this.gmail.users.labels.list({ userId: 'me' });
       console.log('Gmail permissions verified:', gmailTest.data.labels?.length, 'labels found');
@@ -131,6 +259,9 @@ class GmailAttachmentExtractor {
   ): Promise<void> {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
+        // Ensure token validity before modifying labels
+        await this.ensureTokenValidity();
+
         // Get label IDs
         const [removeIds, addIds] = await Promise.all([
           Promise.all(labelsToRemove.map(label => this.getLabelId(label))),
@@ -253,6 +384,9 @@ class GmailAttachmentExtractor {
 
   private async createFolderInDrive(folderName: string): Promise<string> {
     try {
+      // Ensure token is valid before creating folder
+      await this.ensureTokenValidity();
+
       const response = await this.drive.files.list({
         q: `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
         spaces: 'drive',
@@ -287,6 +421,9 @@ class GmailAttachmentExtractor {
 
   private async getOrCreateYearFolder(parentFolderId: string, year: string): Promise<string> {
     try {
+      // Ensure token is valid before getting/creating year folder
+      await this.ensureTokenValidity();
+
       const response = await this.drive.files.list({
         q: `name='${year}' and '${parentFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
         spaces: 'drive',
@@ -326,6 +463,9 @@ class GmailAttachmentExtractor {
     filename: string
   ): Promise<string> {
     try {
+      // Ensure token is valid before downloading attachment
+      await this.ensureTokenValidity();
+
       const attachment = await this.gmail.users.messages.attachments.get({
         userId: "me",
         messageId: messageId,
@@ -363,15 +503,17 @@ class GmailAttachmentExtractor {
     year: string
   ): Promise<void> {
     try {
+      // Ensure token is valid before uploading
+      await this.ensureTokenValidity();
+
       const yearFolderId = await this.getOrCreateYearFolder(parentFolderId, year);
       const fileContent = await Deno.readFile(filePath);
       const blob = new Blob([fileContent], { type: mimeType });
 
-      const oauth2Client = this.drive.context._options.auth as unknown as {
-        credentials: { access_token?: string }
-      };
+      // Get a fresh access token using our stored auth client
+      const { token } = await this.auth.getAccessToken();
 
-      if (!oauth2Client?.credentials?.access_token) {
+      if (!token) {
         throw new Error('No access token available');
       }
 
@@ -391,24 +533,21 @@ class GmailAttachmentExtractor {
         {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${oauth2Client.credentials.access_token}`,
+            'Authorization': `Bearer ${token}`,
           },
           body: formData
         }
       );
 
       if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Upload failed with status ${response.status}: ${errorText}`);
+        const errorData = await response.json();
+        throw new Error(`Failed to upload file: ${errorData.error?.message || response.statusText}`);
       }
 
+      const _result = await response.json();
       console.log(`Successfully uploaded ${filename} to Drive`);
-    } catch (error: unknown) {
-      console.error('Error uploading to Drive:', error);
-      if (error instanceof Error && 'response' in error &&
-          error.response && typeof error.response === 'object' && 'data' in error.response) {
-        console.error('Error details:', error.response.data);
-      }
+    } catch (error) {
+      console.error(`Error uploading ${filename} to Drive:`, error);
       throw error;
     }
   }
@@ -521,8 +660,13 @@ class GmailAttachmentExtractor {
     return hasPreprocess;
   }
 
-  public async extractAttachments(_config: Config): Promise<void> {
+  public async extractAttachments(): Promise<void> {
     try {
+      // Check if re-authentication is needed
+      if (this.config.tokens.needsReauth) {
+        throw new Error('Authentication required. Please run the setup script.');
+      }
+
       await this.verifyPermissions();
 
       // Get label ID for the input and output labels
@@ -552,6 +696,9 @@ class GmailAttachmentExtractor {
       // Process each email
       for (const email of emails.data.messages) {
         try {
+          // Ensure token is valid before processing each email
+          await this.ensureTokenValidity();
+
           // Get full message details
           const message = await this.gmail.users.messages.get({
             userId: "me",
@@ -683,6 +830,8 @@ class GmailAttachmentExtractor {
 
   public async listAllLabels(): Promise<void> {
     try {
+      await this.ensureTokenValidity();
+
       const response = await this.gmail.users.labels.list({
         userId: "me",
       });
@@ -701,10 +850,29 @@ class GmailAttachmentExtractor {
 // Update the loadConfig function
 const loadConfig = async (): Promise<Config> => {
   try {
-    const configText = await Deno.readTextFile("./data/config.json");
-    const config: Config = JSON.parse(configText);
-    console.log('\nConfiguration loaded successfully');
-    return config;
+    // Try to load from secure storage first
+    try {
+      const config = await loadConfigSecurely() as Config;
+      console.log('\nConfiguration loaded securely');
+      return config;
+    } catch (secureError) {
+      console.warn('Could not load secure config:', secureError);
+
+      // Fall back to plaintext config
+      const configText = await Deno.readTextFile("./data/config.json");
+      const config: Config = JSON.parse(configText);
+      console.log('\nConfiguration loaded from plaintext file');
+
+      // Migrate to secure storage if possible
+      try {
+        await saveConfigSecurely(config);
+        console.log('Migrated configuration to secure storage');
+      } catch (migrationError) {
+        console.warn('Could not migrate to secure storage:', migrationError);
+      }
+
+      return config;
+    }
   } catch (error) {
     console.error("Error loading config.json. Have you run the OAuth setup script?");
     throw error;
@@ -730,7 +898,7 @@ export const main = async () => {
 
     const config = await loadConfig();
     const extractor = new GmailAttachmentExtractor(config);
-    await extractor.extractAttachments(config);
+    await extractor.extractAttachments();
   } catch (error) {
     console.error("\nError:", error);
     Deno.exit(1);

@@ -3,7 +3,9 @@
     "dev": "deno run --watch main.ts",
     "setup": "deno run -A oauth_setup.ts",
     "run": "deno run -A main.ts",
-    "scheduler": "deno run -A scheduler.ts"
+    "scheduler": "deno run -A scheduler.ts",
+    "verify": "deno run -A --check main.ts",
+    "refresh": "deno run -A token_refresh.ts"
   },
   "imports": {
     "googleapis": "npm:googleapis@129.0.0",

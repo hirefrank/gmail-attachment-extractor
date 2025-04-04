@@ -22,7 +22,8 @@ async function getTokens(clientId: string, clientSecret: string): Promise<void> 
   const authUrl = oAuth2Client.generateAuthUrl({
     access_type: 'offline',
     scope: SCOPES,
-    include_granted_scopes: true
+    include_granted_scopes: true,
+    prompt: 'consent' // Force the consent screen to appear, which ensures we get a refresh token
   });
 
   console.log('\nOpening browser for authentication...');
@@ -54,13 +55,18 @@ async function getTokens(clientId: string, clientSecret: string): Promise<void> 
           },
           tokens: {
             access_token: tokens.access_token,
-            refresh_token: tokens.refresh_token
+            refresh_token: tokens.refresh_token,
+            expiry_date: tokens.expiry_date || Date.now() + 3600 * 1000, // Default to 1 hour if not provided
+            needsReauth: false
           }
         };
 
         console.log('\nVerifying token structure...');
         console.log('Access Token:', tokens.access_token ? 'Present' : 'Missing');
         console.log('Refresh Token:', tokens.refresh_token ? 'Present' : 'Missing');
+        console.log('Expiry Date:', configObject.tokens.expiry_date
+          ? new Date(configObject.tokens.expiry_date).toLocaleString()
+          : 'Not provided');
 
         await Deno.writeTextFile(
           './data/config.json',
@@ -106,6 +112,17 @@ async function getTokens(clientId: string, clientSecret: string): Promise<void> 
 }
 
 console.log('Starting OAuth setup...');
+
+// Ensure data directory exists
+try {
+  await Deno.mkdir('./data', { recursive: true });
+  console.log('Ensured data directory exists');
+} catch (error) {
+  // Directory already exists or other error
+  if (!(error instanceof Deno.errors.AlreadyExists)) {
+    console.error('Error creating data directory:', error);
+  }
+}
 
 // Get credentials from environment or prompt
 const clientId = Deno.env.get("GOOGLE_CLIENT_ID") || prompt("Enter your Google Client ID:");

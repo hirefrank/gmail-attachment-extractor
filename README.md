@@ -216,6 +216,70 @@ DEBUG=1 deno task run
 - `Invalid sender format`: Email sender format may be non-standard
 - `Filename too long`: Original filename exceeds length limits
 
+## Token Management
+
+The application includes a robust token management system to handle OAuth authentication with Google's APIs. This system ensures continuous operation without manual intervention when access tokens expire.
+
+### Automatic Token Refresh
+
+- The application automatically refreshes access tokens before they expire
+- Tokens are refreshed in several ways:
+  - Before making any API calls (proactive check)
+  - When a token expiration error is encountered (reactive handling)
+  - Through a daily scheduled job (maintenance refresh)
+- Token refresh events are logged for troubleshooting
+
+### Token Storage
+
+- Authentication tokens are stored in the `./data/config.json` file by default
+- An optional encrypted storage mechanism is available for improved security
+- The configuration includes:
+  - Access token (short-lived, typically 1 hour)
+  - Refresh token (long-lived)
+  - Expiration timestamp
+  - Re-authentication flag
+
+### Re-Authentication Handling
+
+If a refresh token becomes invalid (revoked, expired, or otherwise unusable), the application will:
+
+1. Set a `needsReauth` flag in the configuration
+2. Skip further processing until re-authentication is completed
+3. Provide clear instructions for running the setup script
+4. Automatically clear the flag once re-authentication is successful
+
+The scheduler checks for the `needsReauth` flag before each execution and will skip processing if re-authentication is required.
+
+### Secure Token Storage
+
+For improved security, tokens can be stored in an encrypted format:
+
+- Token encryption using a local key
+- Automatic migration from plaintext to encrypted storage
+- Fallback to plaintext if encryption is unavailable
+
+To enable secure token storage, the application will automatically attempt to use it when available. No additional configuration is required.
+
+### Troubleshooting Token Issues
+
+Common token-related issues and solutions:
+
+- **"Token has been expired or revoked"**: Run `deno task setup` to re-authenticate
+- **"Invalid client"**: Verify your OAuth credentials in Google Cloud Console
+- **"Missing refresh token"**: Ensure the OAuth consent screen is configured with the correct scopes
+- **"Access denied"**: Check if the application has the required permissions
+
+For more persistent issues, you can manually clear the configuration:
+
+```bash
+rm ./data/config.json ./data/config.encrypted
+deno task setup
+```
+
+### Token Refresh Schedule
+
+The application includes a scheduled token refresh that runs daily at midnight (Eastern Time) to ensure tokens remain valid even during periods of inactivity.
+
 ## Security Notes
 
 - Keep your `config.json` secure and never commit it to version control

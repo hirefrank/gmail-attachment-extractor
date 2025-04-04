@@ -4,6 +4,11 @@
 # Environment variables
 .env
 
+# Config files with sensitive information
+/data/config.json
+/data/config.encrypted
+/data/.secret_key
+
 # OAuth and credentials
 config.json
 credentials.json
