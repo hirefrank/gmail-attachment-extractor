@@ -100,16 +100,16 @@
   - [x] Utilities integrated into main worker
 
 ### Step 6: Gmail API Service
-- [ ] Run Step 6 prompt with LLM
-- [ ] Verify outputs:
-  - [ ] `src/services/gmail.service.ts` created
-  - [ ] `src/types/gmail.ts` defines Gmail interfaces
-  - [ ] Email search/query implemented
-  - [ ] Attachment download working
-  - [ ] Label modification working
-  - [ ] Gmail API error handling
-  - [ ] Service tests pass
-  - [ ] Gmail connectivity test in main worker
+- [x] Run Step 6 prompt with LLM
+- [x] Verify outputs:
+  - [x] `src/services/gmail.service.ts` created
+  - [x] `src/types/gmail.ts` defines Gmail interfaces
+  - [x] Email search/query implemented
+  - [x] Attachment download working
+  - [x] Label modification working
+  - [x] Gmail API error handling
+  - [x] Service tests pass
+  - [x] Gmail connectivity test in main worker
 
 ### Step 7: Google Drive API Service
 - [ ] Run Step 7 prompt with LLM

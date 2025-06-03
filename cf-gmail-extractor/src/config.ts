@@ -41,6 +41,10 @@ export interface ValidatedConfig {
   logLevel: string;
   maxEmailsPerRun: number;
   maxFileSizeMB: number;
+  maxAttachmentSize: number;
+  requiredLabel: string;
+  processedLabel: string;
+  errorLabel: string;
 }
 
 // Configuration validation errors
@@ -87,7 +91,11 @@ export function loadConfiguration(env: Env): ValidatedConfig {
     googleClientSecret: env.GOOGLE_CLIENT_SECRET.trim(),
     logLevel,
     maxEmailsPerRun,
-    maxFileSizeMB
+    maxFileSizeMB,
+    maxAttachmentSize: maxFileSizeMB * 1024 * 1024, // Convert MB to bytes
+    requiredLabel: CONFIG.LABELS.SOURCE,
+    processedLabel: CONFIG.LABELS.PROCESSED,
+    errorLabel: 'ProcessingError' // Default error label
   };
 }
 

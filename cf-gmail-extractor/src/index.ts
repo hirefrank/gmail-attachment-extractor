@@ -17,6 +17,10 @@ import { extractSenderInfo, formatFilename } from './utils/filename.utils';
 import { parseEmailDate, formatDuration } from './utils/date.utils';
 import { createErrorLog, isRetryableError } from './utils/error.utils';
 
+// Import Gmail service
+import { GmailService } from './services/gmail.service';
+import type { GmailServiceConfig } from './types/gmail';
+
 // Logger utility for consistent logging
 class Logger {
   private logLevel: string;
@@ -99,6 +103,16 @@ export default {
         if (testDate && testSender && testError && testFilename && testDuration && typeof testRetryable === 'boolean') {
           logger.debug('Utility functions validated successfully');
         }
+        
+        // Initialize Gmail service for validation
+        const gmailConfig: GmailServiceConfig = {
+          maxAttachmentSize: config.maxAttachmentSize,
+          requiredLabel: config.requiredLabel,
+          processedLabel: config.processedLabel,
+          errorLabel: config.errorLabel
+        };
+        const gmailService = new GmailService(gmailConfig, logger);
+        logger.debug('Gmail service initialized successfully');
       }
     } catch (error) {
       // Handle configuration errors before logger is available
@@ -156,6 +170,7 @@ export default {
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     let config: ValidatedConfig;
     let logger: Logger;
+    let gmailService: GmailService;
     
     try {
       // Load and validate configuration
@@ -167,9 +182,19 @@ export default {
       storageService = new StorageService(env.STORAGE);
       authService = new AuthService(storageService, config.googleClientId, config.googleClientSecret);
       
+      // Initialize Gmail service
+      const gmailConfig: GmailServiceConfig = {
+        maxAttachmentSize: config.maxAttachmentSize,
+        requiredLabel: config.requiredLabel,
+        processedLabel: config.processedLabel,
+        errorLabel: config.errorLabel
+      };
+      gmailService = new GmailService(gmailConfig, logger);
+      
       logConfigurationStatus(config, logger);
       logger.info('Storage service initialized for scheduled execution');
       logger.info('Authentication service initialized for scheduled execution');
+      logger.info('Gmail service initialized for scheduled execution');
       
       // Validate tokens
       const tokenStatus = await authService.validateTokens();
@@ -198,10 +223,29 @@ export default {
     
     try {
       
-      // Main processing logic (to be implemented)
+      // Main processing logic
       logger.info('Processing emails...');
       logger.info(`Processing up to ${config.maxEmailsPerRun} emails with max file size ${config.maxFileSizeMB}MB`);
-      // TODO: Implement email processing
+      
+      // Get valid access token
+      const accessToken = await authService.getValidToken();
+      
+      // Get label ID for required label
+      const labelId = await gmailService.getLabelIdByName(accessToken, config.requiredLabel);
+      if (!labelId) {
+        throw new Error(`Required label '${config.requiredLabel}' not found in Gmail account`);
+      }
+      
+      // Search for emails with the required label
+      const query = gmailService.buildLabelQuery(labelId);
+      const emails = await gmailService.searchEmails(accessToken, {
+        query,
+        maxResults: config.maxEmailsPerRun
+      });
+      
+      logger.info(`Found ${emails.length} emails to process`);
+      
+      // TODO: Process each email (will be implemented in Step 8)
       
       logger.info('Scheduled execution completed successfully');
     } catch (error) {
