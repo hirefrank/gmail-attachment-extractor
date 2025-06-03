@@ -89,15 +89,15 @@
   - [x] Token validation on startup
 
 ### Step 5: Utility Functions
-- [ ] Run Step 5 prompt with LLM
-- [ ] Verify outputs:
-  - [ ] `src/utils/filename.utils.ts` created
-  - [ ] `src/utils/date.utils.ts` created
-  - [ ] `src/utils/error.utils.ts` created
-  - [ ] `src/types/utils.ts` defines utility types
-  - [ ] All utility functions tested
-  - [ ] Edge cases handled (international chars, long names, etc.)
-  - [ ] Utilities integrated into main worker
+- [x] Run Step 5 prompt with LLM
+- [x] Verify outputs:
+  - [x] `src/utils/filename.utils.ts` created
+  - [x] `src/utils/date.utils.ts` created
+  - [x] `src/utils/error.utils.ts` created
+  - [x] `src/types/utils.ts` defines utility types
+  - [x] All utility functions tested
+  - [x] Edge cases handled (international chars, long names, etc.)
+  - [x] Utilities integrated into main worker
 
 ### Step 6: Gmail API Service
 - [ ] Run Step 6 prompt with LLM

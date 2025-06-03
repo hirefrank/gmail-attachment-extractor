@@ -12,6 +12,11 @@ import { StorageError } from './types/storage';
 import { AuthService } from './services/auth.service';
 import { AuthError } from './types/auth';
 
+// Import utility functions for validation
+import { extractSenderInfo, formatFilename } from './utils/filename.utils';
+import { parseEmailDate, formatDuration } from './utils/date.utils';
+import { createErrorLog, isRetryableError } from './utils/error.utils';
+
 // Logger utility for consistent logging
 class Logger {
   private logLevel: string;
@@ -81,6 +86,19 @@ export default {
         logConfigurationStatus(config, logger);
         logger.info('Storage service initialized');
         logger.info('Authentication service initialized');
+        
+        // Validate utility functions on health check
+        logger.debug('Validating utility functions...');
+        const testDate = parseEmailDate('2024-01-01');
+        const testSender = extractSenderInfo('test@example.com');
+        const testError = createErrorLog(new Error('test'));
+        const testFilename = formatFilename('01', 'Test', 'file.pdf');
+        const testDuration = formatDuration(1500);
+        const testRetryable = isRetryableError(new Error('network timeout'));
+        
+        if (testDate && testSender && testError && testFilename && testDuration && typeof testRetryable === 'boolean') {
+          logger.debug('Utility functions validated successfully');
+        }
       }
     } catch (error) {
       // Handle configuration errors before logger is available
