@@ -1,0 +1,270 @@
+name: Test and Deploy CloudFlare Worker
+
+on:
+  push:
+    branches: [main, staging, cf-workers]
+  pull_request:
+    branches: [main]
+
+env:
+  NODE_VERSION: '18'
+
+jobs:
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: 'cf-gmail-extractor/package-lock.json'
+          
+      - name: Install dependencies
+        working-directory: cf-gmail-extractor
+        run: npm ci
+        
+      - name: Run linting
+        working-directory: cf-gmail-extractor
+        run: npm run lint
+        
+      - name: Run type checking
+        working-directory: cf-gmail-extractor
+        run: npm run typecheck
+        
+      - name: Run unit tests
+        working-directory: cf-gmail-extractor
+        run: npm test
+        
+      - name: Run build
+        working-directory: cf-gmail-extractor
+        run: npm run build
+        
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: cf-gmail-extractor/dist/
+          retention-days: 7
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: 'cf-gmail-extractor/package-lock.json'
+          
+      - name: Install dependencies
+        working-directory: cf-gmail-extractor
+        run: npm ci
+        
+      - name: Run security audit
+        working-directory: cf-gmail-extractor
+        run: npm audit --audit-level=moderate
+        
+      - name: Check for vulnerabilities
+        working-directory: cf-gmail-extractor
+        run: npx audit-ci --moderate
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [test, security-scan]
+    if: github.ref == 'refs/heads/cf-workers' || github.ref == 'refs/heads/staging'
+    environment: staging
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: 'cf-gmail-extractor/package-lock.json'
+          
+      - name: Install dependencies
+        working-directory: cf-gmail-extractor
+        run: npm ci
+        
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: cf-gmail-extractor/dist/
+          
+      - name: Install Wrangler
+        run: npm install -g wrangler
+        
+      - name: Authenticate with CloudFlare
+        run: echo "${{ secrets.CLOUDFLARE_API_TOKEN }}" | wrangler auth --token
+        
+      - name: Deploy to staging
+        working-directory: cf-gmail-extractor
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID_STAGING }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET_STAGING }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npm run deploy:staging
+          
+      - name: Run post-deployment tests
+        working-directory: cf-gmail-extractor
+        env:
+          STAGING_WORKER_URL: ${{ secrets.STAGING_WORKER_URL }}
+        run: npm run test:e2e:staging
+        
+      - name: Monitor staging deployment
+        working-directory: cf-gmail-extractor
+        run: npm run monitor:staging -- 5
+        continue-on-error: true
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [test, security-scan, deploy-staging]
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: 'cf-gmail-extractor/package-lock.json'
+          
+      - name: Install dependencies
+        working-directory: cf-gmail-extractor
+        run: npm ci
+        
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: cf-gmail-extractor/dist/
+          
+      - name: Install Wrangler
+        run: npm install -g wrangler
+        
+      - name: Authenticate with CloudFlare
+        run: echo "${{ secrets.CLOUDFLARE_API_TOKEN }}" | wrangler auth --token
+        
+      - name: Deploy to production
+        working-directory: cf-gmail-extractor
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID_PRODUCTION }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET_PRODUCTION }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npm run deploy:production
+          
+      - name: Run post-deployment tests
+        working-directory: cf-gmail-extractor
+        env:
+          PRODUCTION_WORKER_URL: ${{ secrets.PRODUCTION_WORKER_URL }}
+        run: npm run test:e2e:production
+        
+      - name: Monitor production deployment
+        working-directory: cf-gmail-extractor
+        run: npm run monitor:production -- 10
+        
+      - name: Create deployment tag
+        run: |
+          git tag "v$(date +%Y%m%d-%H%M%S)"
+          git push origin --tags
+
+  rollback:
+    name: Emergency Rollback
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    environment: production
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: 'cf-gmail-extractor/package-lock.json'
+          
+      - name: Install dependencies
+        working-directory: cf-gmail-extractor
+        run: npm ci
+        
+      - name: Install Wrangler
+        run: npm install -g wrangler
+        
+      - name: Authenticate with CloudFlare
+        run: echo "${{ secrets.CLOUDFLARE_API_TOKEN }}" | wrangler auth --token
+        
+      - name: Rollback production
+        working-directory: cf-gmail-extractor
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ROLLBACK_VERSION: ${{ github.event.inputs.version }}
+        run: npm run rollback:production
+        
+      - name: Verify rollback
+        working-directory: cf-gmail-extractor
+        run: npm run monitor:production -- 5
+
+  notify:
+    name: Notify Team
+    runs-on: ubuntu-latest
+    needs: [deploy-production]
+    if: always()
+    
+    steps:
+      - name: Notify success
+        if: needs.deploy-production.result == 'success'
+        run: |
+          echo "✅ Production deployment successful"
+          # Add Slack/Teams notification here
+          
+      - name: Notify failure
+        if: needs.deploy-production.result == 'failure'
+        run: |
+          echo "❌ Production deployment failed"
+          # Add Slack/Teams notification here
+          
+      - name: Create GitHub issue on failure
+        if: needs.deploy-production.result == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: 'Production Deployment Failed',
+              body: `
+                Production deployment failed on ${new Date().toISOString()}
+                
+                **Branch:** ${context.ref}
+                **Commit:** ${context.sha}
+                **Run:** ${context.runId}
+                
+                Please investigate and consider rollback if necessary.
+              `,
+              labels: ['bug', 'deployment', 'urgent']
+            })

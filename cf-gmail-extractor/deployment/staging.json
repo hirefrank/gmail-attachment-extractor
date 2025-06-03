@@ -1,0 +1,18 @@
+{
+  "kvNamespace": "gmail-extractor-staging",
+  "cronSchedule": "*/30 * * * *",
+  "logLevel": "debug",
+  "maxEmailsPerRun": 10,
+  "maxAttachmentSize": 5242880,
+  "environment": "staging",
+  "monitoring": {
+    "healthCheckInterval": "1m",
+    "alertThreshold": 3,
+    "retentionDays": 7
+  },
+  "features": {
+    "enableDetailedLogging": true,
+    "enablePerformanceMetrics": true,
+    "enableTestData": true
+  }
+}
