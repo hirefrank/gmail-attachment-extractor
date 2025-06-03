@@ -80,6 +80,9 @@ describe('Worker Cron Handler', () => {
       expect.stringContaining('[INFO] Gmail service initialized for scheduled execution')
     );
     expect(consoleSpy.log).toHaveBeenCalledWith(
+      expect.stringContaining('[INFO] Drive service initialized for scheduled execution')
+    );
+    expect(consoleSpy.log).toHaveBeenCalledWith(
       expect.stringContaining('[INFO] OAuth token valid, expires in')
     );
     expect(consoleSpy.log).toHaveBeenCalledWith(

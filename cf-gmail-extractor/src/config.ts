@@ -45,6 +45,7 @@ export interface ValidatedConfig {
   requiredLabel: string;
   processedLabel: string;
   errorLabel: string;
+  driveFolderId?: string;
 }
 
 // Configuration validation errors
@@ -95,7 +96,8 @@ export function loadConfiguration(env: Env): ValidatedConfig {
     maxAttachmentSize: maxFileSizeMB * 1024 * 1024, // Convert MB to bytes
     requiredLabel: CONFIG.LABELS.SOURCE,
     processedLabel: CONFIG.LABELS.PROCESSED,
-    errorLabel: 'ProcessingError' // Default error label
+    errorLabel: 'ProcessingError', // Default error label
+    driveFolderId: env.DRIVE_FOLDER_ID?.trim() // Optional Drive folder ID
   };
 }
 

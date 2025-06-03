@@ -112,16 +112,16 @@
   - [x] Gmail connectivity test in main worker
 
 ### Step 7: Google Drive API Service
-- [ ] Run Step 7 prompt with LLM
-- [ ] Verify outputs:
-  - [ ] `src/services/drive.service.ts` created
-  - [ ] `src/types/drive.ts` defines Drive interfaces
-  - [ ] Folder search/creation implemented
-  - [ ] File upload with multipart working
-  - [ ] Year folder logic working
-  - [ ] Drive API error handling
-  - [ ] Service tests pass
-  - [ ] Drive connectivity test in main worker
+- [x] Run Step 7 prompt with LLM
+- [x] Verify outputs:
+  - [x] `src/services/drive.service.ts` created
+  - [x] `src/types/drive.ts` defines Drive interfaces
+  - [x] Folder search/creation implemented
+  - [x] File upload with multipart working
+  - [x] Year folder logic working
+  - [x] Drive API error handling
+  - [x] Service tests pass
+  - [x] Drive connectivity test in main worker
 
 ### Step 8: Core Email Processing Logic
 - [ ] Run Step 8 prompt with LLM

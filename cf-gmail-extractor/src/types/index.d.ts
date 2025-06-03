@@ -7,6 +7,7 @@ export interface Env {
   LOG_LEVEL?: string;
   MAX_EMAILS_PER_RUN?: string;
   MAX_FILE_SIZE_MB?: string;
+  DRIVE_FOLDER_ID?: string;
   
   // KV namespace binding
   STORAGE: KVNamespace;

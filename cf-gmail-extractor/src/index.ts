@@ -21,6 +21,10 @@ import { createErrorLog, isRetryableError } from './utils/error.utils';
 import { GmailService } from './services/gmail.service';
 import type { GmailServiceConfig } from './types/gmail';
 
+// Import Drive service
+import { DriveService } from './services/drive.service';
+import type { DriveServiceConfig } from './types/drive';
+
 // Logger utility for consistent logging
 class Logger {
   private logLevel: string;
@@ -113,6 +117,15 @@ export default {
         };
         const gmailService = new GmailService(gmailConfig, logger);
         logger.debug('Gmail service initialized successfully');
+        
+        // Initialize Drive service for validation
+        const driveConfig: DriveServiceConfig = {
+          rootFolderId: config.driveFolderId,
+          maxFileSize: config.maxAttachmentSize,
+          defaultMimeType: 'application/octet-stream'
+        };
+        const driveService = new DriveService(driveConfig, logger);
+        logger.debug('Drive service initialized successfully');
       }
     } catch (error) {
       // Handle configuration errors before logger is available
@@ -171,6 +184,7 @@ export default {
     let config: ValidatedConfig;
     let logger: Logger;
     let gmailService: GmailService;
+    let driveService: DriveService;
     
     try {
       // Load and validate configuration
@@ -191,10 +205,19 @@ export default {
       };
       gmailService = new GmailService(gmailConfig, logger);
       
+      // Initialize Drive service
+      const driveConfig: DriveServiceConfig = {
+        rootFolderId: config.driveFolderId,
+        maxFileSize: config.maxAttachmentSize,
+        defaultMimeType: 'application/octet-stream'
+      };
+      driveService = new DriveService(driveConfig, logger);
+      
       logConfigurationStatus(config, logger);
       logger.info('Storage service initialized for scheduled execution');
       logger.info('Authentication service initialized for scheduled execution');
       logger.info('Gmail service initialized for scheduled execution');
+      logger.info('Drive service initialized for scheduled execution');
       
       // Validate tokens
       const tokenStatus = await authService.validateTokens();
