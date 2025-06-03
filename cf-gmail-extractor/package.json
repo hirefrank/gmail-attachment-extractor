@@ -1,0 +1,31 @@
+{
+  "name": "cf-gmail-extractor",
+  "version": "1.0.0",
+  "description": "CloudFlare Workers Gmail Attachment Extractor",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "deploy": "wrangler deploy",
+    "cf-typegen": "wrangler types",
+    "build": "tsc --noEmit"
+  },
+  "keywords": [
+    "cloudflare-workers",
+    "gmail",
+    "google-drive",
+    "automation"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241127.0",
+    "@miniflare/core": "^2.14.4",
+    "@types/node": "^20.11.5",
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.1",
+    "vitest-environment-miniflare": "^2.14.4",
+    "wrangler": "^3.57.1"
+  }
+}
