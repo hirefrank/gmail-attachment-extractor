@@ -21,6 +21,17 @@ const mockContext = {
 } as any;
 
 describe('Worker HTTP Handler', () => {
+  it('should return configuration error when credentials missing', async () => {
+    const envWithoutCreds = { ...mockEnv, GOOGLE_CLIENT_ID: '' };
+    const request = new Request('http://localhost/');
+    const response = await worker.fetch(request, envWithoutCreds, mockContext);
+    
+    expect(response.status).toBe(500);
+    const text = await response.text();
+    expect(text).toContain('Configuration Error');
+    expect(text).toContain('GOOGLE_CLIENT_ID');
+  });
+  
   it('should respond to root path', async () => {
     const request = new Request('http://localhost/');
     const response = await worker.fetch(request, mockEnv, mockContext);
@@ -38,6 +49,7 @@ describe('Worker HTTP Handler', () => {
     const health = await response.json() as any;
     expect(health).toHaveProperty('status');
     expect(health).toHaveProperty('timestamp');
+    expect(health.checks).toHaveProperty('configuration', true);
     expect(health.checks).toHaveProperty('environment', true);
     expect(health.checks).toHaveProperty('storage');
   });
@@ -87,10 +99,10 @@ describe('Worker Health Check', () => {
     const request = new Request('http://localhost/health');
     const response = await worker.fetch(request, envWithoutCreds, mockContext);
     
-    expect(response.status).toBe(503);
-    const health = await response.json() as any;
-    expect(health.status).toBe('unhealthy');
-    expect(health.checks.environment).toBe(false);
+    // Configuration error returns 500 before reaching health check
+    expect(response.status).toBe(500);
+    const text = await response.text();
+    expect(text).toContain('Configuration Error');
   });
   
   it('should handle KV storage errors gracefully', async () => {

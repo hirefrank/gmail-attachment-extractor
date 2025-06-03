@@ -40,6 +40,9 @@ describe('Worker Cron Handler', () => {
     await worker.scheduled(mockEvent, mockEnv, mockContext);
     
     expect(consoleSpy.log).toHaveBeenCalledWith(
+      expect.stringContaining('[INFO] Configuration loaded successfully')
+    );
+    expect(consoleSpy.log).toHaveBeenCalledWith(
       expect.stringContaining('[INFO] Scheduled execution started at')
     );
   });
@@ -50,7 +53,7 @@ describe('Worker Cron Handler', () => {
     await worker.scheduled(mockEvent, envWithoutCreds, mockContext);
     
     expect(consoleSpy.error).toHaveBeenCalledWith(
-      '[ERROR] Scheduled execution failed:',
+      '[ERROR] Configuration loading failed in scheduled handler:',
       expect.any(Error)
     );
   });
@@ -61,7 +64,7 @@ describe('Worker Cron Handler', () => {
     await worker.scheduled(mockEvent, envWithoutCreds, mockContext);
     
     expect(consoleSpy.error).toHaveBeenCalledWith(
-      expect.stringContaining('[ERROR] Scheduled execution failed:'),
+      '[ERROR] Configuration loading failed in scheduled handler:',
       expect.any(Error)
     );
   });
