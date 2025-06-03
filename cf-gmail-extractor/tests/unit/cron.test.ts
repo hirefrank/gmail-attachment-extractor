@@ -77,33 +77,19 @@ describe('Worker Cron Handler', () => {
   it('should log execution start', async () => {
     await worker.scheduled(mockEvent, mockEnv, mockContext);
     
-    expect(consoleSpy.log).toHaveBeenCalledWith(
-      expect.stringContaining('[INFO] Configuration loaded successfully')
-    );
-    expect(consoleSpy.log).toHaveBeenCalledWith(
-      expect.stringContaining('[INFO] Storage service initialized for scheduled execution')
-    );
-    expect(consoleSpy.log).toHaveBeenCalledWith(
-      expect.stringContaining('[INFO] Authentication service initialized for scheduled execution')
-    );
-    expect(consoleSpy.log).toHaveBeenCalledWith(
-      expect.stringContaining('[INFO] Gmail service initialized for scheduled execution')
-    );
-    expect(consoleSpy.log).toHaveBeenCalledWith(
-      expect.stringContaining('[INFO] Drive service initialized for scheduled execution')
-    );
-    expect(consoleSpy.log).toHaveBeenCalledWith(
-      expect.stringContaining('[INFO] Processor service initialized for scheduled execution')
-    );
-    expect(consoleSpy.log).toHaveBeenCalledWith(
-      expect.stringContaining('[INFO] OAuth token valid, expires in')
-    );
-    expect(consoleSpy.log).toHaveBeenCalledWith(
-      expect.stringContaining('[INFO] Scheduled execution started at')
-    );
-    expect(consoleSpy.log).toHaveBeenCalledWith(
-      expect.stringContaining('[INFO] Starting email processing...')
-    );
+    // Verify logs contain expected messages (with timestamps now)
+    const logCalls = consoleSpy.log.mock.calls.map(call => call[0]);
+    
+    expect(logCalls.some(msg => msg.includes('Cron execution started'))).toBe(true);
+    expect(logCalls.some(msg => msg.includes('Configuration loaded successfully'))).toBe(true);
+    expect(logCalls.some(msg => msg.includes('Storage service initialized for scheduled execution'))).toBe(true);
+    expect(logCalls.some(msg => msg.includes('Authentication service initialized for scheduled execution'))).toBe(true);
+    expect(logCalls.some(msg => msg.includes('Gmail service initialized for scheduled execution'))).toBe(true);
+    expect(logCalls.some(msg => msg.includes('Drive service initialized for scheduled execution'))).toBe(true);
+    expect(logCalls.some(msg => msg.includes('Processor service initialized for scheduled execution'))).toBe(true);
+    expect(logCalls.some(msg => msg.includes('OAuth token valid, expires in'))).toBe(true);
+    expect(logCalls.some(msg => msg.includes('Starting email processing...'))).toBe(true);
+    expect(logCalls.some(msg => msg.includes('Scheduled execution completed successfully'))).toBe(true);
   });
   
   it('should validate environment configuration', async () => {
@@ -153,8 +139,7 @@ describe('Worker Cron Handler', () => {
     await worker.scheduled(mockEvent, debugEnv, mockContext);
     
     // Info logs should not appear when log level is error
-    expect(consoleSpy.log).not.toHaveBeenCalledWith(
-      expect.stringContaining('[INFO]')
-    );
+    const logCalls = consoleSpy.log.mock.calls.map(call => call[0]);
+    expect(logCalls.some(msg => msg.includes('[INFO]'))).toBe(false);
   });
 });

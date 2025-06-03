@@ -98,7 +98,7 @@ describe('Worker HTTP Handler', () => {
     const response = await worker.fetch(request, mockEnv, mockContext);
     
     expect(response.status).toBe(401);
-    const body = await response.json();
+    const body = await response.json() as any;
     expect(body.error).toBe('Not authenticated');
     expect(body.message).toContain('OAuth setup');
   });

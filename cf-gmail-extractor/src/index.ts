@@ -29,12 +29,14 @@ import type { DriveServiceConfig } from './types/drive';
 import { ProcessorService } from './services/processor.service';
 import type { ProcessorConfig } from './types/processor';
 
-// Logger utility for consistent logging
+// Logger utility for consistent logging with request context
 class Logger {
   private logLevel: string;
+  private requestId?: string;
   
-  constructor(logLevel: string = 'info') {
+  constructor(logLevel: string = 'info', requestId?: string) {
     this.logLevel = logLevel.toLowerCase();
+    this.requestId = requestId;
   }
   
   private shouldLog(level: string): boolean {
@@ -44,54 +46,87 @@ class Logger {
     return messageLevelIndex <= currentLevelIndex;
   }
   
+  private formatMessage(level: string, message: string): string {
+    const timestamp = new Date().toISOString();
+    const requestIdPart = this.requestId ? ` [${this.requestId}]` : '';
+    return `[${timestamp}] [${level.toUpperCase()}]${requestIdPart} ${message}`;
+  }
+  
   error(message: string, error?: any) {
     if (this.shouldLog('error')) {
-      console.error(`[ERROR] ${message}`, error || '');
+      const formattedMessage = this.formatMessage('error', message);
+      if (error instanceof Error) {
+        console.error(formattedMessage, { error: error.message, stack: error.stack });
+      } else {
+        console.error(formattedMessage, error || '');
+      }
     }
   }
   
   warn(message: string) {
     if (this.shouldLog('warn')) {
-      console.warn(`[WARN] ${message}`);
+      console.warn(this.formatMessage('warn', message));
     }
   }
   
   info(message: string) {
     if (this.shouldLog('info')) {
-      console.log(`[INFO] ${message}`);
+      console.log(this.formatMessage('info', message));
     }
   }
   
   debug(message: string) {
     if (this.shouldLog('debug')) {
-      console.log(`[DEBUG] ${message}`);
+      console.log(this.formatMessage('debug', message));
     }
   }
 }
 
-// Global configuration and service holders
+// Global configuration and service holders with lazy initialization
 let globalConfig: ValidatedConfig | null = null;
-let storageService: StorageService | null = null;
-let authService: AuthService | null = null;
+let globalStorageService: StorageService | null = null;
+let globalAuthService: AuthService | null = null;
+
+// Generate request ID for tracking
+function generateRequestId(): string {
+  return `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
+// Lazy service initialization
+function getOrCreateStorageService(env: Env): StorageService {
+  if (!globalStorageService) {
+    globalStorageService = new StorageService(env.STORAGE);
+  }
+  return globalStorageService;
+}
+
+function getOrCreateAuthService(env: Env, config: ValidatedConfig): AuthService {
+  if (!globalAuthService) {
+    const storage = getOrCreateStorageService(env);
+    globalAuthService = new AuthService(storage, config.googleClientId, config.googleClientSecret);
+  }
+  return globalAuthService;
+}
 
 // Main worker export
 export default {
   // HTTP request handler
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const requestId = generateRequestId();
     let config: ValidatedConfig;
     let logger: Logger;
     
     try {
       // Load and validate configuration
       config = loadConfiguration(env);
-      logger = new Logger(config.logLevel);
+      logger = new Logger(config.logLevel, requestId);
       
       // Store config globally for other handlers
       globalConfig = config;
       
-      // Initialize services
-      storageService = new StorageService(env.STORAGE);
-      authService = new AuthService(storageService, config.googleClientId, config.googleClientSecret);
+      logger.debug(`Processing ${request.method} request to ${new URL(request.url).pathname}`);
+      
+      // Services are initialized lazily when needed
       
       // Log configuration on first request
       if (new URL(request.url).pathname === '/health') {
@@ -158,7 +193,7 @@ export default {
           
         case '/setup':
           // OAuth setup endpoint
-          return await handleOAuthSetup(request, authService!, logger);
+          return await handleOAuthSetup(request, getOrCreateAuthService(env, config), logger);
           
         case '/process':
           // Manual trigger endpoint
@@ -169,21 +204,51 @@ export default {
           
         case '/status':
           // Status endpoint
-          return await handleStatus(storageService!, logger);
+          return await handleStatus(getOrCreateStorageService(env), logger);
+          
+        case '/logs':
+          // Error logs endpoint
+          return await handleErrorLogs(getOrCreateStorageService(env), logger);
           
         default:
           return new Response('Not found', { status: 404 });
       }
     } catch (error) {
       logger.error('Request handler error:', error);
-      return new Response('Internal server error', { status: 500 });
+      
+      // Store critical errors in KV
+      try {
+        const storage = getOrCreateStorageService(env);
+        await storage.appendErrorLog({
+          timestamp: new Date().toISOString(),
+          error: error instanceof Error ? error.message : String(error),
+          context: `HTTP ${request.method} ${new URL(request.url).pathname} [${requestId}]`,
+          stack: error instanceof Error ? error.stack : undefined,
+          service: 'http',
+          operation: 'fetch'
+        });
+      } catch (logError) {
+        // Ignore logging errors
+      }
+      
+      return new Response(JSON.stringify({
+        error: 'Internal server error',
+        requestId,
+        message: error instanceof Error ? error.message : 'Unknown error'
+      }), { 
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      });
     }
   },
   
   // Cron handler for scheduled execution
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    const executionId = `cron_${Date.now()}`;
     let config: ValidatedConfig;
     let logger: Logger;
+    let storageService: StorageService;
+    let authService: AuthService;
     let gmailService: GmailService;
     let driveService: DriveService;
     let processorService: ProcessorService;
@@ -191,10 +256,12 @@ export default {
     try {
       // Load and validate configuration
       config = loadConfiguration(env);
-      logger = new Logger(config.logLevel);
+      logger = new Logger(config.logLevel, executionId);
       globalConfig = config;
       
-      // Initialize services
+      logger.info(`Cron execution started - Event: ${event.cron}, Scheduled: ${new Date(event.scheduledTime).toISOString()}`);
+      
+      // Initialize services for cron execution
       storageService = new StorageService(env.STORAGE);
       authService = new AuthService(storageService, config.googleClientId, config.googleClientSecret);
       
@@ -253,15 +320,20 @@ export default {
       console.error('[ERROR] Configuration loading failed in scheduled handler:', error);
       // Store error in KV for monitoring
       if (env.STORAGE) {
-        await env.STORAGE.put('last_cron_error', JSON.stringify({
+        const storage = new StorageService(env.STORAGE);
+        await storage.appendErrorLog({
           timestamp: new Date().toISOString(),
-          error: error instanceof Error ? error.message : String(error)
-        }));
+          error: error instanceof Error ? error.message : String(error),
+          context: `Cron initialization ${executionId}`,
+          stack: error instanceof Error ? error.stack : undefined,
+          service: 'cron',
+          operation: 'init'
+        });
       }
       return;
     }
     
-    logger.info(`Scheduled execution started at ${new Date().toISOString()}`);
+    const startTime = Date.now();
     
     try {
       
@@ -283,14 +355,21 @@ export default {
         });
       }
       
-      logger.info('Scheduled execution completed successfully');
+      const duration = Date.now() - startTime;
+      logger.info(`Scheduled execution completed successfully in ${duration}ms`);
     } catch (error) {
-      logger.error('Scheduled execution failed:', error);
+      const duration = Date.now() - startTime;
+      logger.error(`Scheduled execution failed after ${duration}ms:`, error);
+      
       // Store error in KV for monitoring
-      await env.STORAGE.put('last_cron_error', JSON.stringify({
+      await storageService.appendErrorLog({
         timestamp: new Date().toISOString(),
-        error: error instanceof Error ? error.message : String(error)
-      }));
+        error: error instanceof Error ? error.message : String(error),
+        context: `Cron execution ${executionId}`,
+        stack: error instanceof Error ? error.stack : undefined,
+        service: 'cron',
+        operation: 'scheduled'
+      });
     }
   }
 };
@@ -331,7 +410,7 @@ async function handleHealthCheck(env: Env, logger: Logger): Promise<Response> {
   
   // Check storage service health
   try {
-    const service = storageService || new StorageService(env.STORAGE);
+    const service = getOrCreateStorageService(env);
     health.checks.storageService = await service.isHealthy();
   } catch (error) {
     logger.error('Storage service health check failed:', error);
@@ -370,7 +449,13 @@ async function handleStatus(storage: StorageService, logger: Logger): Promise<Re
     });
   } catch (error) {
     logger.error('Status handler error:', error);
-    return new Response('Error retrieving status', { status: 500 });
+    return new Response(JSON.stringify({
+      error: 'Error retrieving status',
+      message: error instanceof Error ? error.message : String(error)
+    }), { 
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
   }
 }
 
@@ -610,6 +695,41 @@ async function handleManualProcess(
       error: 'Processing failed',
       message: error instanceof Error ? error.message : String(error)
     }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+/**
+ * Handle error logs retrieval
+ */
+async function handleErrorLogs(storage: StorageService, logger: Logger): Promise<Response> {
+  try {
+    const limit = 50; // Default to last 50 errors
+    const errorLogs = await storage.getErrorLogs(limit);
+    
+    return new Response(JSON.stringify({
+      count: errorLogs.length,
+      limit,
+      logs: errorLogs.map(log => ({
+        timestamp: log.timestamp,
+        error: log.error,
+        context: log.context,
+        service: log.service,
+        operation: log.operation,
+        // Omit stack traces from response for security
+        hasStack: !!log.stack
+      }))
+    }, null, 2), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    logger.error('Error logs handler error:', error);
+    return new Response(JSON.stringify({
+      error: 'Failed to retrieve error logs',
+      message: error instanceof Error ? error.message : String(error)
+    }), { 
       status: 500,
       headers: { 'Content-Type': 'application/json' }
     });

@@ -269,7 +269,7 @@ describe('Processor Service', () => {
       mockGmail.getHeaderValue
         .mockImplementation((msg, header) => {
           const headers = msg.payload?.headers || [];
-          const found = headers.find(h => h.name === header);
+          const found = headers.find((h: any) => h.name === header);
           return found?.value;
         });
       
@@ -386,8 +386,10 @@ describe('Processor Service', () => {
       mockDrive.fileExists.mockReset();
       mockStorage.isFileUploaded.mockReset();
       
+      // Since checkDuplicateFile checks Drive first and returns true if found,
+      // we only need Drive to exist to trigger the duplicate check
       mockDrive.fileExists.mockResolvedValueOnce(true); // File exists in Drive
-      mockStorage.isFileUploaded.mockResolvedValueOnce(false); // Not in storage
+      // Storage check won't be reached since Drive check returns true first
 
       const result = await service.processEmailAttachments(
         mockEmail,
