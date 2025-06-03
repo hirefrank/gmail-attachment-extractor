@@ -7,6 +7,8 @@
 
 import { CONFIG, loadConfiguration, logConfigurationStatus, ConfigurationError, type ValidatedConfig } from './config';
 import type { Env, RequestContext } from './types';
+import { StorageService } from './services/storage.service';
+import { StorageError } from './types/storage';
 
 // Logger utility for consistent logging
 class Logger {
@@ -48,8 +50,9 @@ class Logger {
   }
 }
 
-// Global configuration holder
+// Global configuration and service holders
 let globalConfig: ValidatedConfig | null = null;
+let storageService: StorageService | null = null;
 
 // Main worker export
 export default {
@@ -66,9 +69,13 @@ export default {
       // Store config globally for other handlers
       globalConfig = config;
       
+      // Initialize storage service
+      storageService = new StorageService(env.STORAGE);
+      
       // Log configuration on first request
       if (new URL(request.url).pathname === '/health') {
         logConfigurationStatus(config, logger);
+        logger.info('Storage service initialized');
       }
     } catch (error) {
       // Handle configuration errors before logger is available
@@ -113,11 +120,8 @@ export default {
           });
           
         case '/status':
-          // Status endpoint (to be implemented)
-          return new Response('Status endpoint - Coming soon', {
-            status: 501,
-            headers: { 'Content-Type': 'text/plain' }
-          });
+          // Status endpoint
+          return await handleStatus(storageService!, logger);
           
         default:
           return new Response('Not found', { status: 404 });
@@ -139,7 +143,11 @@ export default {
       logger = new Logger(config.logLevel);
       globalConfig = config;
       
+      // Initialize storage service
+      storageService = new StorageService(env.STORAGE);
+      
       logConfigurationStatus(config, logger);
+      logger.info('Storage service initialized for scheduled execution');
     } catch (error) {
       console.error('[ERROR] Configuration loading failed in scheduled handler:', error);
       // Store error in KV for monitoring
@@ -181,7 +189,8 @@ async function handleHealthCheck(env: Env, logger: Logger): Promise<Response> {
     checks: {
       configuration: false,
       environment: false,
-      storage: false
+      storage: false,
+      storageService: false
     }
   };
   
@@ -206,8 +215,17 @@ async function handleHealthCheck(env: Env, logger: Logger): Promise<Response> {
     health.checks.storage = false;
   }
   
+  // Check storage service health
+  try {
+    const service = storageService || new StorageService(env.STORAGE);
+    health.checks.storageService = await service.isHealthy();
+  } catch (error) {
+    logger.error('Storage service health check failed:', error);
+    health.checks.storageService = false;
+  }
+  
   // Determine overall health status
-  if (!health.checks.configuration || !health.checks.environment || !health.checks.storage) {
+  if (!health.checks.configuration || !health.checks.environment || !health.checks.storage || !health.checks.storageService) {
     health.status = 'unhealthy';
   }
   
@@ -215,4 +233,29 @@ async function handleHealthCheck(env: Env, logger: Logger): Promise<Response> {
     status: health.status === 'healthy' ? 200 : 503,
     headers: { 'Content-Type': 'application/json' }
   });
+}
+
+// Status handler
+async function handleStatus(storage: StorageService, logger: Logger): Promise<Response> {
+  try {
+    const [lastRun, processingStatus, recentErrors] = await Promise.all([
+      storage.getLastRunTime(),
+      storage.getProcessingStatus(),
+      storage.getErrorLogs(10)
+    ]);
+    
+    const status = {
+      lastRun: lastRun || 'Never',
+      lastStatus: processingStatus || null,
+      recentErrors: recentErrors.length,
+      storageHealth: await storage.isHealthy()
+    };
+    
+    return new Response(JSON.stringify(status, null, 2), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    logger.error('Status handler error:', error);
+    return new Response('Error retrieving status', { status: 500 });
+  }
 }
