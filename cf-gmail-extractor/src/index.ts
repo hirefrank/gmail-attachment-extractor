@@ -25,6 +25,10 @@ import type { GmailServiceConfig } from './types/gmail';
 import { DriveService } from './services/drive.service';
 import type { DriveServiceConfig } from './types/drive';
 
+// Import Processor service
+import { ProcessorService } from './services/processor.service';
+import type { ProcessorConfig } from './types/processor';
+
 // Logger utility for consistent logging
 class Logger {
   private logLevel: string;
@@ -157,14 +161,11 @@ export default {
           return await handleOAuthSetup(request, authService!, logger);
           
         case '/process':
-          // Manual trigger endpoint (to be implemented)
+          // Manual trigger endpoint
           if (request.method !== 'POST') {
             return new Response('Method not allowed', { status: 405 });
           }
-          return new Response('Manual processing endpoint - Coming soon', {
-            status: 501,
-            headers: { 'Content-Type': 'text/plain' }
-          });
+          return await handleManualProcess(env, config, logger);
           
         case '/status':
           // Status endpoint
@@ -185,6 +186,7 @@ export default {
     let logger: Logger;
     let gmailService: GmailService;
     let driveService: DriveService;
+    let processorService: ProcessorService;
     
     try {
       // Load and validate configuration
@@ -213,11 +215,28 @@ export default {
       };
       driveService = new DriveService(driveConfig, logger);
       
+      // Initialize Processor service
+      const processorConfig: ProcessorConfig = {
+        maxEmailsPerRun: config.maxEmailsPerRun,
+        maxAttachmentSize: config.maxAttachmentSize,
+        skipLargeAttachments: true,
+        continueOnError: true
+      };
+      processorService = new ProcessorService(
+        processorConfig,
+        storageService,
+        authService,
+        gmailService,
+        driveService,
+        logger
+      );
+      
       logConfigurationStatus(config, logger);
       logger.info('Storage service initialized for scheduled execution');
       logger.info('Authentication service initialized for scheduled execution');
       logger.info('Gmail service initialized for scheduled execution');
       logger.info('Drive service initialized for scheduled execution');
+      logger.info('Processor service initialized for scheduled execution');
       
       // Validate tokens
       const tokenStatus = await authService.validateTokens();
@@ -247,28 +266,22 @@ export default {
     try {
       
       // Main processing logic
-      logger.info('Processing emails...');
-      logger.info(`Processing up to ${config.maxEmailsPerRun} emails with max file size ${config.maxFileSizeMB}MB`);
+      logger.info('Starting email processing...');
       
-      // Get valid access token
-      const accessToken = await authService.getValidToken();
+      // Process emails using the processor service
+      const report = await processorService.processEmails();
       
-      // Get label ID for required label
-      const labelId = await gmailService.getLabelIdByName(accessToken, config.requiredLabel);
-      if (!labelId) {
-        throw new Error(`Required label '${config.requiredLabel}' not found in Gmail account`);
+      logger.info(
+        `Processing completed: ${report.successfulEmails}/${report.totalEmails} emails successful, ` +
+        `${report.totalFilesUploaded} files uploaded in ${report.totalProcessingTime}ms`
+      );
+      
+      if (report.errors.length > 0) {
+        logger.warn(`${report.errors.length} errors occurred during processing`);
+        report.errors.forEach(error => {
+          logger.error(`Email ${error.emailId}: ${error.error}`);
+        });
       }
-      
-      // Search for emails with the required label
-      const query = gmailService.buildLabelQuery(labelId);
-      const emails = await gmailService.searchEmails(accessToken, {
-        query,
-        maxResults: config.maxEmailsPerRun
-      });
-      
-      logger.info(`Found ${emails.length} emails to process`);
-      
-      // TODO: Process each email (will be implemented in Step 8)
       
       logger.info('Scheduled execution completed successfully');
     } catch (error) {
@@ -512,5 +525,93 @@ async function handleOAuthSetup(request: Request, auth: AuthService, logger: Log
   } catch (error) {
     logger.error('Failed to generate OAuth setup page:', error);
     return new Response('Failed to initialize OAuth setup', { status: 500 });
+  }
+}
+
+/**
+ * Handle manual process trigger
+ */
+async function handleManualProcess(
+  env: Env,
+  config: ValidatedConfig,
+  logger: Logger
+): Promise<Response> {
+  try {
+    logger.info('Manual process triggered');
+    
+    // Initialize services
+    const storageService = new StorageService(env.STORAGE);
+    const authService = new AuthService(storageService, config.googleClientId, config.googleClientSecret);
+    
+    // Check if we have valid tokens
+    const tokenStatus = await authService.validateTokens();
+    if (!tokenStatus.hasTokens) {
+      return new Response(JSON.stringify({
+        error: 'Not authenticated',
+        message: 'Please complete OAuth setup first at /setup endpoint'
+      }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    // Initialize Gmail and Drive services
+    const gmailConfig: GmailServiceConfig = {
+      maxAttachmentSize: config.maxAttachmentSize,
+      requiredLabel: config.requiredLabel,
+      processedLabel: config.processedLabel,
+      errorLabel: config.errorLabel
+    };
+    const gmailService = new GmailService(gmailConfig, logger);
+    
+    const driveConfig: DriveServiceConfig = {
+      rootFolderId: config.driveFolderId,
+      maxFileSize: config.maxAttachmentSize,
+      defaultMimeType: 'application/octet-stream'
+    };
+    const driveService = new DriveService(driveConfig, logger);
+    
+    // Initialize processor
+    const processorConfig: ProcessorConfig = {
+      maxEmailsPerRun: config.maxEmailsPerRun,
+      maxAttachmentSize: config.maxAttachmentSize,
+      skipLargeAttachments: true,
+      continueOnError: true
+    };
+    const processorService = new ProcessorService(
+      processorConfig,
+      storageService,
+      authService,
+      gmailService,
+      driveService,
+      logger
+    );
+    
+    // Process emails
+    const report = await processorService.processEmails();
+    
+    return new Response(JSON.stringify({
+      success: true,
+      report: {
+        totalEmails: report.totalEmails,
+        successfulEmails: report.successfulEmails,
+        failedEmails: report.failedEmails,
+        totalFilesUploaded: report.totalFilesUploaded,
+        processingTime: report.totalProcessingTime,
+        errors: report.errors
+      }
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    logger.error('Manual process failed:', error);
+    return new Response(JSON.stringify({
+      error: 'Processing failed',
+      message: error instanceof Error ? error.message : String(error)
+    }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
   }
 }

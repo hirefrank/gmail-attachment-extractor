@@ -93,13 +93,14 @@ describe('Worker HTTP Handler', () => {
     expect(status).toHaveProperty('storageHealth');
   });
   
-  it('should return 501 for unimplemented /process endpoint', async () => {
+  it('should return 401 for /process endpoint without auth', async () => {
     const request = new Request('http://localhost/process', { method: 'POST' });
     const response = await worker.fetch(request, mockEnv, mockContext);
     
-    expect(response.status).toBe(501);
-    const text = await response.text();
-    expect(text).toContain('Coming soon');
+    expect(response.status).toBe(401);
+    const body = await response.json();
+    expect(body.error).toBe('Not authenticated');
+    expect(body.message).toContain('OAuth setup');
   });
 });
 

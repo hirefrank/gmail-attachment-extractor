@@ -21,7 +21,7 @@ export class GmailService {
   private readonly baseUrl = 'https://gmail.googleapis.com/gmail/v1';
   
   constructor(
-    private readonly config: GmailServiceConfig,
+    public readonly config: GmailServiceConfig,
     private readonly logger: { 
       info: (msg: string) => void;
       error: (msg: string, error?: any) => void;

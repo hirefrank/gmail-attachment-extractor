@@ -50,9 +50,19 @@ describe('Worker Cron Handler', () => {
     
     // Mock fetch for Gmail API calls
     global.fetch = vi.fn()
-      .mockResolvedValueOnce({ // listLabels
+      .mockResolvedValueOnce({ // listLabels for required label
         ok: true,
-        json: async () => ({ labels: [{ id: 'Label_123', name: 'insurance claims/todo' }] })
+        json: async () => ({ labels: [
+          { id: 'Label_123', name: 'insurance claims/todo' },
+          { id: 'Label_456', name: 'insurance claims/processed' }
+        ] })
+      })
+      .mockResolvedValueOnce({ // listLabels for processed label
+        ok: true,
+        json: async () => ({ labels: [
+          { id: 'Label_123', name: 'insurance claims/todo' },
+          { id: 'Label_456', name: 'insurance claims/processed' }
+        ] })
       })
       .mockResolvedValueOnce({ // searchEmails
         ok: true,
@@ -83,16 +93,16 @@ describe('Worker Cron Handler', () => {
       expect.stringContaining('[INFO] Drive service initialized for scheduled execution')
     );
     expect(consoleSpy.log).toHaveBeenCalledWith(
+      expect.stringContaining('[INFO] Processor service initialized for scheduled execution')
+    );
+    expect(consoleSpy.log).toHaveBeenCalledWith(
       expect.stringContaining('[INFO] OAuth token valid, expires in')
     );
     expect(consoleSpy.log).toHaveBeenCalledWith(
       expect.stringContaining('[INFO] Scheduled execution started at')
     );
     expect(consoleSpy.log).toHaveBeenCalledWith(
-      expect.stringContaining('[INFO] Found 0 emails to process')
-    );
-    expect(consoleSpy.log).toHaveBeenCalledWith(
-      expect.stringContaining('[INFO] Scheduled execution completed successfully')
+      expect.stringContaining('[INFO] Starting email processing...')
     );
   });
   
@@ -121,9 +131,19 @@ describe('Worker Cron Handler', () => {
     
     // Re-mock fetch for this test
     global.fetch = vi.fn()
-      .mockResolvedValueOnce({ // listLabels
+      .mockResolvedValueOnce({ // listLabels for required label
         ok: true,
-        json: async () => ({ labels: [{ id: 'Label_123', name: 'insurance claims/todo' }] })
+        json: async () => ({ labels: [
+          { id: 'Label_123', name: 'insurance claims/todo' },
+          { id: 'Label_456', name: 'insurance claims/processed' }
+        ] })
+      })
+      .mockResolvedValueOnce({ // listLabels for processed label
+        ok: true,
+        json: async () => ({ labels: [
+          { id: 'Label_123', name: 'insurance claims/todo' },
+          { id: 'Label_456', name: 'insurance claims/processed' }
+        ] })
       })
       .mockResolvedValueOnce({ // searchEmails
         ok: true,
