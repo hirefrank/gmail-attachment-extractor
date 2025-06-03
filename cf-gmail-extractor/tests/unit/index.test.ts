@@ -72,17 +72,13 @@ describe('Worker HTTP Handler', () => {
     expect(response.status).toBe(405);
   });
   
-  it('should return 501 for unimplemented endpoints', async () => {
-    const endpoints = ['/setup'];
+  it('should handle setup endpoint', async () => {
+    const request = new Request('http://localhost/setup');
+    const response = await worker.fetch(request, mockEnv, mockContext);
     
-    for (const endpoint of endpoints) {
-      const request = new Request(`http://localhost${endpoint}`);
-      const response = await worker.fetch(request, mockEnv, mockContext);
-      
-      expect(response.status).toBe(501);
-      const text = await response.text();
-      expect(text).toContain('Coming soon');
-    }
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).toContain('OAuth');
   });
   
   it('should handle status endpoint', async () => {
@@ -97,7 +93,7 @@ describe('Worker HTTP Handler', () => {
     expect(status).toHaveProperty('storageHealth');
   });
   
-  it('should handle POST request to /process', async () => {
+  it('should return 501 for unimplemented /process endpoint', async () => {
     const request = new Request('http://localhost/process', { method: 'POST' });
     const response = await worker.fetch(request, mockEnv, mockContext);
     

@@ -9,6 +9,8 @@ import { CONFIG, loadConfiguration, logConfigurationStatus, ConfigurationError, 
 import type { Env, RequestContext } from './types';
 import { StorageService } from './services/storage.service';
 import { StorageError } from './types/storage';
+import { AuthService } from './services/auth.service';
+import { AuthError } from './types/auth';
 
 // Logger utility for consistent logging
 class Logger {
@@ -53,6 +55,7 @@ class Logger {
 // Global configuration and service holders
 let globalConfig: ValidatedConfig | null = null;
 let storageService: StorageService | null = null;
+let authService: AuthService | null = null;
 
 // Main worker export
 export default {
@@ -69,13 +72,15 @@ export default {
       // Store config globally for other handlers
       globalConfig = config;
       
-      // Initialize storage service
+      // Initialize services
       storageService = new StorageService(env.STORAGE);
+      authService = new AuthService(storageService, config.googleClientId, config.googleClientSecret);
       
       // Log configuration on first request
       if (new URL(request.url).pathname === '/health') {
         logConfigurationStatus(config, logger);
         logger.info('Storage service initialized');
+        logger.info('Authentication service initialized');
       }
     } catch (error) {
       // Handle configuration errors before logger is available
@@ -103,11 +108,8 @@ export default {
           return await handleHealthCheck(env, logger);
           
         case '/setup':
-          // OAuth setup endpoint (to be implemented)
-          return new Response('OAuth setup endpoint - Coming soon', {
-            status: 501,
-            headers: { 'Content-Type': 'text/plain' }
-          });
+          // OAuth setup endpoint
+          return await handleOAuthSetup(request, authService!, logger);
           
         case '/process':
           // Manual trigger endpoint (to be implemented)
@@ -143,11 +145,25 @@ export default {
       logger = new Logger(config.logLevel);
       globalConfig = config;
       
-      // Initialize storage service
+      // Initialize services
       storageService = new StorageService(env.STORAGE);
+      authService = new AuthService(storageService, config.googleClientId, config.googleClientSecret);
       
       logConfigurationStatus(config, logger);
       logger.info('Storage service initialized for scheduled execution');
+      logger.info('Authentication service initialized for scheduled execution');
+      
+      // Validate tokens
+      const tokenStatus = await authService.validateTokens();
+      if (!tokenStatus.hasTokens) {
+        throw new Error('No OAuth tokens found. Please complete setup at /setup endpoint.');
+      }
+      if (tokenStatus.isExpired) {
+        logger.info('OAuth token expired, refreshing...');
+        await authService.getValidToken(); // This will refresh automatically
+      } else {
+        logger.info(`OAuth token valid, expires in ${tokenStatus.expiresIn} seconds`);
+      }
     } catch (error) {
       console.error('[ERROR] Configuration loading failed in scheduled handler:', error);
       // Store error in KV for monitoring
@@ -257,5 +273,159 @@ async function handleStatus(storage: StorageService, logger: Logger): Promise<Re
   } catch (error) {
     logger.error('Status handler error:', error);
     return new Response('Error retrieving status', { status: 500 });
+  }
+}
+
+// OAuth setup handler
+async function handleOAuthSetup(request: Request, auth: AuthService, logger: Logger): Promise<Response> {
+  const url = new URL(request.url);
+  
+  // Handle OAuth callback
+  if (url.searchParams.has('code')) {
+    try {
+      const code = url.searchParams.get('code')!;
+      const error = url.searchParams.get('error');
+      
+      if (error) {
+        return new Response(`OAuth error: ${error} - ${url.searchParams.get('error_description') || 'Unknown error'}`, {
+          status: 400,
+          headers: { 'Content-Type': 'text/plain' }
+        });
+      }
+      
+      // Exchange code for tokens
+      const redirectUri = `${url.origin}/setup`;
+      await auth.exchangeCodeForTokens(code, redirectUri);
+      
+      logger.info('OAuth setup completed successfully');
+      
+      return new Response(`
+        <html>
+          <head>
+            <title>OAuth Setup Complete</title>
+            <style>
+              body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
+              .success { color: green; }
+              .info { background: #f0f0f0; padding: 15px; border-radius: 5px; margin: 20px 0; }
+              code { background: #e0e0e0; padding: 2px 5px; border-radius: 3px; }
+            </style>
+          </head>
+          <body>
+            <h1 class="success">✓ OAuth Setup Complete</h1>
+            <p>Your Gmail Attachment Extractor has been successfully authorized.</p>
+            <div class="info">
+              <h3>Next Steps:</h3>
+              <ul>
+                <li>The worker will automatically process emails every Sunday at midnight UTC</li>
+                <li>You can trigger manual processing by making a POST request to <code>/process</code></li>
+                <li>Check the current status at <code>/status</code></li>
+                <li>Monitor health at <code>/health</code></li>
+              </ul>
+            </div>
+            <p>You can close this window.</p>
+          </body>
+        </html>
+      `, {
+        headers: { 'Content-Type': 'text/html' }
+      });
+    } catch (error) {
+      logger.error('OAuth setup failed:', error);
+      
+      let errorMessage = 'OAuth setup failed: ';
+      if (error instanceof AuthError) {
+        errorMessage += error.message;
+      } else {
+        errorMessage += 'Unknown error';
+      }
+      
+      return new Response(errorMessage, {
+        status: 500,
+        headers: { 'Content-Type': 'text/plain' }
+      });
+    }
+  }
+  
+  // Show OAuth initialization page
+  try {
+    const tokenStatus = await auth.validateTokens();
+    
+    if (tokenStatus.hasTokens && !tokenStatus.isExpired) {
+      return new Response(`
+        <html>
+          <head>
+            <title>OAuth Already Configured</title>
+            <style>
+              body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
+              .info { background: #f0f0f0; padding: 15px; border-radius: 5px; margin: 20px 0; }
+              .warning { color: orange; }
+            </style>
+          </head>
+          <body>
+            <h1>OAuth Already Configured</h1>
+            <p>Your Gmail Attachment Extractor is already authorized and ready to use.</p>
+            <div class="info">
+              <p><strong>Token Status:</strong></p>
+              <ul>
+                <li>Token expires in: ${Math.floor(tokenStatus.expiresIn! / 60)} minutes</li>
+                <li>Automatic refresh: Enabled</li>
+              </ul>
+            </div>
+            <p class="warning">⚠️ To re-authorize, you'll need to clear existing tokens first.</p>
+          </body>
+        </html>
+      `, {
+        headers: { 'Content-Type': 'text/html' }
+      });
+    }
+    
+    // Generate authorization URL
+    const redirectUri = `${url.origin}/setup`;
+    const authUrl = auth.getAuthorizationUrl(redirectUri);
+    
+    return new Response(`
+      <html>
+        <head>
+          <title>OAuth Setup - Gmail Attachment Extractor</title>
+          <style>
+            body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
+            .button { 
+              display: inline-block; 
+              padding: 10px 20px; 
+              background: #4285f4; 
+              color: white; 
+              text-decoration: none; 
+              border-radius: 5px; 
+              margin: 20px 0;
+            }
+            .button:hover { background: #357ae8; }
+            .info { background: #f0f0f0; padding: 15px; border-radius: 5px; margin: 20px 0; }
+            .warning { color: #d93025; }
+          </style>
+        </head>
+        <body>
+          <h1>OAuth Setup - Gmail Attachment Extractor</h1>
+          <p>To use this service, you need to authorize access to your Gmail and Google Drive.</p>
+          
+          <div class="info">
+            <h3>Permissions Required:</h3>
+            <ul>
+              <li><strong>Gmail:</strong> Read and modify messages and labels</li>
+              <li><strong>Google Drive:</strong> Create and manage files created by this app</li>
+            </ul>
+          </div>
+          
+          <p>Click the button below to begin the authorization process:</p>
+          
+          <a href="${authUrl}" class="button">Authorize with Google</a>
+          
+          <p class="warning">⚠️ Make sure you trust this application before proceeding.</p>
+        </body>
+      </html>
+    `, {
+      headers: { 'Content-Type': 'text/html' }
+    });
+  } catch (error) {
+    logger.error('Failed to generate OAuth setup page:', error);
+    return new Response('Failed to initialize OAuth setup', { status: 500 });
   }
 }

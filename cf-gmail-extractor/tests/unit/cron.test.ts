@@ -16,7 +16,20 @@ describe('Worker Cron Handler', () => {
     LOG_LEVEL: 'info',
     STORAGE: {
       put: async () => {},
-      get: async () => null,
+      get: async (key: string) => {
+        // Mock OAuth tokens for successful test
+        if (key === 'oauth_tokens') {
+          return JSON.stringify({
+            access_token: 'test-token',
+            refresh_token: 'test-refresh',
+            expiry_date: Date.now() + 3600000, // 1 hour from now
+            token_type: 'Bearer',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          });
+        }
+        return null;
+      },
       delete: async () => {},
       list: async () => ({ keys: [], list_complete: true, cursor: undefined })
     } as any
@@ -41,6 +54,15 @@ describe('Worker Cron Handler', () => {
     
     expect(consoleSpy.log).toHaveBeenCalledWith(
       expect.stringContaining('[INFO] Configuration loaded successfully')
+    );
+    expect(consoleSpy.log).toHaveBeenCalledWith(
+      expect.stringContaining('[INFO] Storage service initialized for scheduled execution')
+    );
+    expect(consoleSpy.log).toHaveBeenCalledWith(
+      expect.stringContaining('[INFO] Authentication service initialized for scheduled execution')
+    );
+    expect(consoleSpy.log).toHaveBeenCalledWith(
+      expect.stringContaining('[INFO] OAuth token valid, expires in')
     );
     expect(consoleSpy.log).toHaveBeenCalledWith(
       expect.stringContaining('[INFO] Scheduled execution started at')

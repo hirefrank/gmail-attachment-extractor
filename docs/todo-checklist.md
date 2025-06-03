@@ -78,15 +78,15 @@
   - [x] Storage service integrated into main worker
 
 ### Step 4: Authentication Service
-- [ ] Run Step 4 prompt with LLM
-- [ ] Verify outputs:
-  - [ ] `src/services/auth.service.ts` created
-  - [ ] `src/types/auth.ts` defines auth interfaces
-  - [ ] Token refresh logic implemented
-  - [ ] OAuth API integration working
-  - [ ] Setup endpoint created (`/setup`)
-  - [ ] Auth tests pass
-  - [ ] Token validation on startup
+- [x] Run Step 4 prompt with LLM
+- [x] Verify outputs:
+  - [x] `src/services/auth.service.ts` created
+  - [x] `src/types/auth.ts` defines auth interfaces
+  - [x] Token refresh logic implemented
+  - [x] OAuth API integration working
+  - [x] Setup endpoint created (`/setup`)
+  - [x] Auth tests pass
+  - [x] Token validation on startup
 
 ### Step 5: Utility Functions
 - [ ] Run Step 5 prompt with LLM
