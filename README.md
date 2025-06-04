@@ -1,302 +1,393 @@
-# Gmail Attachment Extractor
+# CloudFlare Workers Gmail Attachment Extractor
 
-A Deno script that automatically extracts attachments from Gmail emails with specific labels, saves them to Google Drive, and manages email labels for processing status.
+A CloudFlare Worker that automatically extracts attachments from Gmail emails with specific labels, uploads them to Google Drive with organized naming, and manages email labels to track processing status.
 
 ## Features
 
-- Automatic extraction of email attachments
-- Organized storage in Google Drive with year-based folders
-- Intelligent file naming based on sender and date
-- Label management for tracking processed items
-- Duplicate prevention with processing history
-- Robust error handling and retry logic
-- Detailed logging for troubleshooting
-
-## Prerequisites
-
-- [Deno](https://deno.land/) installed on your system
-- A Google Cloud Project with Gmail and Drive APIs enabled
-- Google Cloud OAuth 2.0 credentials
-- Gmail labels set up for processing workflow
-
-## Setup
-
-### 1. Google Cloud Console Setup
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com)
-2. Create a new project or select an existing one
-3. Enable the following APIs:
-   - Gmail API
-   - Google Drive API
-
-### 2. OAuth Consent Screen Setup
-
-1. Go to "APIs & Services" → "OAuth consent screen"
-2. Choose User Type (Internal or External)
-3. Fill in the application details:
-   - App name
-   - User support email
-   - Developer contact information
-4. Add the following scopes under "Scopes for Google APIs":
-   - `https://www.googleapis.com/auth/gmail.modify`
-   - `https://www.googleapis.com/auth/drive.file`
-5. Add any test users if using External user type
-
-### 3. OAuth Credentials Setup
-
-1. Go to "APIs & Services" → "Credentials"
-2. Click "Create Credentials" → "OAuth client ID"
-3. Choose "Desktop Application" as the application type
-4. Set up the OAuth redirect URI:
-   - Add `http://localhost:9000/callback` to the Authorized redirect URIs
-5. Download the client credentials
-
-### 4. Gmail Label Setup
-
-1. Create two labels in Gmail:
-   - Source label (e.g., "* insurance claim")
-   - Processed label (e.g., "processed insurance claim")
-2. Apply the source label to emails you want to process
-3. The script will automatically switch labels after processing
-
-### 5. Initial Authentication
-
-Run the OAuth setup script:
-
-```bash
-deno task setup
-```
-
-This will:
-1. Prompt for your Google Cloud credentials (Client ID and Client Secret)
-2. Open a browser for authentication
-3. Create a `config.json` file with your access tokens
-
-### 6. Running the Script
-
-Extract attachments using:
-
-```bash
-deno task run
-```
-
-For development with auto-reload:
-```bash
-deno task dev
-```
-
-Enable verbose logging:
-```bash
-DEBUG=1 deno task run
-```
-
-## File Organization
-
-Files are organized in Google Drive following this structure:
-```
-OutputFolder/
-├── 2023/
-│   ├── MM_SendersLastName_OriginalFilename.ext
-│   └── ...
-└── 2024/
-    ├── MM_SendersLastName_OriginalFilename.ext
-    └── ...
-```
-
-Naming convention:
-- MM: Two-digit month
-- SendersLastName: Extracted from email sender (max 20 chars)
-- OriginalFilename: Sanitized original filename (max 50 chars)
-- Total filename length is limited to 100 characters
-
-## Label Management
-
-The script handles Gmail labels in the following way:
-1. When processing messages with label "* insurance claim", it will:
-   - Remove the original label
-   - Add a "processed insurance claim" label
-2. Labels must exist before running the script
-3. Label modifications include retry logic with exponential backoff
-4. Failed label modifications are logged but won't stop processing
-
-### Label Requirements
-- Source label (e.g., "* insurance claim") must exist
-- Processed label (e.g., "processed insurance claim") must exist
-- Labels are case-sensitive
-
-## Progress Tracking
-
-The script maintains a record of processed files in `./data/uploaded_files.json`:
-- Prevents duplicate processing of attachments
-- Records are stored as `year/filename`
-- File can be manually cleared to reprocess attachments
+- Automated processing on a schedule (default: Weekly on Sundays and monthly on the 1st at midnight UTC)
+- Gmail label-based filtering (processes emails with `insurance claims/todo` label)
+- Organized Google Drive uploads with year-based folders
+- Duplicate file prevention
+- Robust error handling and logging
+- OAuth 2.0 authentication with automatic token refresh
+- Debug mode for controlling web endpoint access
 
 ## Project Structure
 
 ```
-.
-├── deno.json           # Task definitions and imports
-├── main.ts             # Main script for extracting attachments
-├── oauth_setup.ts      # OAuth setup and token generation
-├── .gitignore         # Git ignore rules
-├── data/              # Data directory
-│   ├── config.json    # Generated configuration file
-│   └── uploaded_files.json # Processing history
-└── temp_attachments/  # Temporary storage (auto-cleaned)
+cf-gmail-extractor/
+├── src/
+│   ├── index.ts           # Main worker entry point
+│   ├── config.ts          # Configuration constants
+│   ├── types/             # TypeScript type definitions
+│   ├── services/          # API service implementations
+│   └── utils/             # Utility functions
+├── tests/
+│   ├── unit/              # Unit tests
+│   └── integration/       # Integration tests
+├── wrangler.toml          # CloudFlare Worker configuration
+├── tsconfig.json          # TypeScript configuration
+└── package.json           # Project dependencies
 ```
 
-## Configuration
+## Development Setup
 
-### deno.json
-```json
-{
-  "tasks": {
-    "dev": "deno run --watch main.ts",
-    "setup": "deno run -A oauth_setup.ts",
-    "run": "deno run -A main.ts"
-  },
-  "imports": {
-    "@std/assert": "jsr:@std/assert@1",
-    "googleapis": "npm:googleapis@129.0.0"
-  }
-}
-```
+1. Install dependencies:
+   ```bash
+   pnpm install
+   ```
 
-### config.json (generated)
-```json
-{
-  "credentials": {
-    "client_id": "your_client_id",
-    "client_secret": "your_client_secret",
-    "redirect_uri": "http://localhost:9000/callback"
-  },
-  "tokens": {
-    "access_token": "your_access_token",
-    "refresh_token": "your_refresh_token"
-  },
-  "label": "default_label",
-  "outputFolder": "default_folder"
-}
-```
+2. Create a `.dev.vars` file with your environment variables:
+   ```
+   GOOGLE_CLIENT_ID=your-client-id
+   GOOGLE_CLIENT_SECRET=your-client-secret
+   DEBUG_MODE=true  # Enable web endpoints for development
+   ```
 
-## Debug Logging
+3. Run tests:
+   ```bash
+   pnpm test
+   ```
 
-The script provides detailed logging for troubleshooting:
-- Permission verification results
-- Label modification attempts and results
-- File download and upload progress
-- Processing status for each email
-- Error details with stack traces when available
+4. Start development server:
+   ```bash
+   pnpm run dev
+   ```
 
-Enable verbose logging by setting the DEBUG environment variable:
+### Configuration
+
+Update the `wrangler.toml` file to configure:
+- Worker name and compatibility settings
+- Cron schedule
+- Environment variables
+- KV namespace bindings
+
+#### Environment Variables
+
+Required secrets (set in Cloudflare):
 ```bash
-DEBUG=1 deno task run
+npx wrangler secret put GOOGLE_CLIENT_ID      # Your Google OAuth client ID
+npx wrangler secret put GOOGLE_CLIENT_SECRET   # Your Google OAuth client secret
+npx wrangler secret put DEBUG_MODE             # Set to "true" to enable web endpoints
 ```
 
-## Common Issues
+Optional configuration (set in `wrangler.toml`):
+```toml
+[vars]
+LOG_LEVEL = "info"              # Logging level: error, warn, info, debug
+MAX_EMAILS_PER_RUN = "50"       # Maximum emails to process per run
+MAX_FILE_SIZE_MB = "25"         # Maximum attachment size in MB
+DRIVE_FOLDER_ID = "folder-id"   # Google Drive folder ID for uploads
+```
 
-### Authentication Issues
-- `invalid_client`: Verify OAuth credentials and redirect URI in Google Cloud Console
-- `Token expired`: Re-run `deno task setup`
-- `redirect_uri_mismatch`: Ensure `http://localhost:9000/callback` is added to Authorized redirect URIs
-- `Access denied`: Check if required scopes are added to the OAuth consent screen
+**Note on DRIVE_FOLDER_ID**: 
+- If specified, files are uploaded directly to this folder (no intermediate "Gmail Attachments" folder)
+- Year subfolders (e.g., "2025") are created inside the specified folder
+- If not specified, creates "Gmail Attachments" folder in Drive root, then year subfolders
+- Get folder ID from the Google Drive URL: `https://drive.google.com/drive/folders/{FOLDER_ID}`
 
-### Label Issues
-- `Label not found`: Verify both source and processed labels exist
-- `Label modification failed`: Check Gmail API quotas and permissions
-- `Skipped label removal`: Original label may have been removed manually
+### CloudFlare KV Namespace
 
-### Gmail/Drive Issues
-- `Permission denied`: Ensure both Gmail and Drive APIs are enabled
-- `Insufficient permission`: Verify OAuth consent screen has the required scopes
-- `Quota exceeded`: Check API usage and limits in Google Cloud Console
+Update the KV namespace ID in `wrangler.toml`:
+```toml
+[[kv_namespaces]]
+binding = "STORAGE"
+id = "YOUR_KV_NAMESPACE_ID"
+```
 
-### File Processing Issues
-- `Already uploaded`: Check uploaded_files.json if reprocessing is needed
-- `Invalid sender format`: Email sender format may be non-standard
-- `Filename too long`: Original filename exceeds length limits
+## API Endpoints
 
-## Token Management
+- `GET /` - Basic information (always available)
+- `GET /health` - Health check endpoint (requires DEBUG_MODE=true)
+- `GET /setup` - OAuth setup flow (requires DEBUG_MODE=true)
+- `POST /process` - Manual processing trigger (requires DEBUG_MODE=true)
+- `GET /status` - Processing status (requires DEBUG_MODE=true)
+- `GET /logs` - View error logs (requires DEBUG_MODE=true)
 
-The application includes a robust token management system to handle OAuth authentication with Google's APIs. This system ensures continuous operation without manual intervention when access tokens expire.
+**Note:** All endpoints except `/` require `DEBUG_MODE=true` to be accessible. In production, set `DEBUG_MODE=false` to disable web endpoints for security.
 
-### Automatic Token Refresh
+## Deployment
 
-- The application automatically refreshes access tokens before they expire
-- Tokens are refreshed in several ways:
-  - Before making any API calls (proactive check)
-  - When a token expiration error is encountered (reactive handling)
-  - Through a daily scheduled job (maintenance refresh)
-- Token refresh events are logged for troubleshooting
+### Prerequisites
 
-### Token Storage
+1. [Cloudflare Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-and-update/) installed
+2. Cloudflare account with Workers KV enabled
+3. Google Cloud Project with OAuth 2.0 credentials
 
-- Authentication tokens are stored in the `./data/config.json` file by default
-- An optional encrypted storage mechanism is available for improved security
-- The configuration includes:
-  - Access token (short-lived, typically 1 hour)
-  - Refresh token (long-lived)
-  - Expiration timestamp
-  - Re-authentication flag
+### Google API Setup
 
-### Re-Authentication Handling
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project or select existing
+3. Enable Gmail API and Google Drive API
+4. Create OAuth 2.0 credentials (Web application type)
+5. Add authorized redirect URI: `https://your-worker.workers.dev/setup`
 
-If a refresh token becomes invalid (revoked, expired, or otherwise unusable), the application will:
+### CloudFlare Setup
 
-1. Set a `needsReauth` flag in the configuration
-2. Skip further processing until re-authentication is completed
-3. Provide clear instructions for running the setup script
-4. Automatically clear the flag once re-authentication is successful
+1. Install dependencies:
+   ```bash
+   pnpm install
+   ```
 
-The scheduler checks for the `needsReauth` flag before each execution and will skip processing if re-authentication is required.
+2. Create a KV namespace:
+   ```bash
+   npx wrangler kv:namespace create STORAGE
+   ```
 
-### Secure Token Storage
+3. Update `wrangler.toml` with your KV namespace ID from the output above
 
-For improved security, tokens can be stored in an encrypted format:
+4. Set up required secrets:
+   ```bash
+   npx wrangler secret put GOOGLE_CLIENT_ID
+   npx wrangler secret put GOOGLE_CLIENT_SECRET
+   ```
 
-- Token encryption using a local key
-- Automatic migration from plaintext to encrypted storage
-- Fallback to plaintext if encryption is unavailable
-
-To enable secure token storage, the application will automatically attempt to use it when available. No additional configuration is required.
-
-### Troubleshooting Token Issues
-
-Common token-related issues and solutions:
-
-- **"Token has been expired or revoked"**: Run `deno task setup` to re-authenticate
-- **"Invalid client"**: Verify your OAuth credentials in Google Cloud Console
-- **"Missing refresh token"**: Ensure the OAuth consent screen is configured with the correct scopes
-- **"Access denied"**: Check if the application has the required permissions
-
-For more persistent issues, you can manually clear the configuration:
+### Deploy
 
 ```bash
-rm ./data/config.json ./data/config.encrypted
-deno task setup
+# Build and deploy
+pnpm run deploy
+
+# Or manually
+pnpm run build
+npx wrangler deploy
 ```
 
-### Token Refresh Schedule
+Your worker will be available at:
+```
+https://gmail-attachment-extractor.YOUR_SUBDOMAIN.workers.dev
+```
 
-The application includes a scheduled token refresh that runs daily at midnight (Eastern Time) to ensure tokens remain valid even during periods of inactivity.
+### Post-Deployment
 
-## Security Notes
+1. **Complete OAuth Setup** (see OAuth Setup section below)
+2. **Verify Cron Schedule**: Check CloudFlare dashboard to ensure both cron triggers are active (Sundays and 1st of month)
+3. **Monitor Initial Run**: Use `wrangler tail` to watch logs during first scheduled execution
 
-- Keep your `config.json` secure and never commit it to version control
-- Use environment variables for sensitive information in production
-- Regularly rotate OAuth credentials if needed
-- The script requests only required permissions:
-  - Gmail modify access (for label management)
-  - Limited Drive access (only files created by the app)
+### Monitoring
 
-## Contributing
+```bash
+# View real-time logs
+wrangler tail
 
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
+# Check worker metrics
+wrangler metrics
+```
+
+### Troubleshooting
+
+**Common Issues:**
+
+1. **OAuth Token Expired**: Enable debug mode and visit `/setup` to re-authorize
+2. **Gmail API Rate Limits**: Reduce `MAX_EMAILS_PER_RUN` in wrangler.toml
+3. **Drive Upload Failures**: Check file size limits and folder permissions
+4. **Cron Not Triggering**: Verify cron syntax in wrangler.toml
+
+### Development
+
+```bash
+# Start development server
+pnpm run dev
+
+# Run tests
+pnpm test
+
+# Run tests in watch mode
+pnpm run test:watch
+```
+
+## OAuth Setup
+
+### Initial Setup
+
+1. **Enable debug mode temporarily**:
+   ```bash
+   npx wrangler secret put DEBUG_MODE
+   # Enter "true" when prompted
+   ```
+
+2. **Access the OAuth setup page**:
+   Navigate to `https://your-worker.workers.dev/setup` in your browser
+
+3. **Complete the OAuth flow**:
+   - Click "Authorize with Google"
+   - Grant access to Gmail (read/modify) and Google Drive (file management)
+   - You'll be redirected back to the worker with a success message
+
+4. **Disable debug mode for production**:
+   ```bash
+   npx wrangler secret put DEBUG_MODE
+   # Enter "false" when prompted (or delete the secret)
+   ```
+
+### How It Works
+
+1. The worker runs automatically every Sunday and on the 1st of each month at midnight UTC
+2. Searches for emails with the label `insurance claims/todo`
+3. Downloads all attachments from matching emails (requires Gmail API format=full)
+4. Uploads attachments to your specified Google Drive folder:
+   - If DRIVE_FOLDER_ID is set: Creates year subfolders directly in that folder
+   - If not set: Creates "Gmail Attachments" folder in Drive root, then year subfolders
+   - Files are named: `MM_SenderLastName_OriginalFilename`
+5. Moves processed emails to `insurance claims/processed` label
+6. Tracks uploaded files to prevent duplicates
+
+### Gmail Label Requirements
+
+- Create these labels in Gmail before running:
+  - `insurance claims/todo` - for emails to process
+  - `insurance claims/processed` - for completed emails
+- Labels are case-sensitive and must match exactly
+- The forward slash creates a nested label structure in Gmail
+- The worker searches using the full label name with quotes: `label:"insurance claims/todo"`
+- Do not use label IDs in configuration - always use the label name
+
+## Migration from Existing Service
+
+### What to Migrate
+
+If you have an existing Deno-based service, you'll need to migrate:
+
+1. **OAuth Tokens** (`oauth_tokens.json`):
+   - Contains your Google access and refresh tokens
+   - Required for the worker to access Gmail and Drive
+
+2. **Uploaded Files List** (`uploaded_files.json`):
+   - List of files already uploaded to prevent duplicates
+   - Format: Array of strings like `["2024/01_15 - John Doe - invoice.pdf"]`
+
+3. **Processing Status** (`processing_status.json`) - Optional:
+   - Last run time and statistics
+
+4. **Error Logs** (`error_logs.json`) - Optional:
+   - Historical error information
+
+### Migration Steps
+
+1. **Locate your existing data** (usually in a `data/` directory):
+   ```bash
+   ls -la data/
+   # Should show: oauth_tokens.json, uploaded_files.json, etc.
+   ```
+
+2. **Run the migration**:
+   ```bash
+   # From the cf-gmail-extractor directory
+   pnpm run migrate ../data
+   # Or specify the path to your data directory
+   pnpm run migrate /path/to/your/data
+   ```
+
+3. **Verify the migration**:
+   ```bash
+   # Check worker status
+   curl https://your-worker.workers.dev/status
+   ```
+
+### Alternative: Fresh Start
+
+If you don't have existing data or want to start fresh:
+
+1. Simply complete the OAuth setup (see above)
+2. The worker will start processing new emails
+3. It will skip any files already in your Drive folder
+
+## Troubleshooting
+
+### Common Issues
+
+**404 errors on endpoints (/setup, /process, /status)**
+- By default, `DEBUG_MODE=false` which disables all web endpoints except `/`
+- Only the cron trigger can run the worker in production
+- To enable web endpoints temporarily: 
+  ```bash
+  echo "true" | npx wrangler secret put DEBUG_MODE
+  ```
+- Remember to disable after setup: `echo "false" | npx wrangler secret put DEBUG_MODE`
+
+**OAuth "Access blocked" or redirect_uri_mismatch**
+- In Google Cloud Console, add the exact redirect URI: `https://your-worker.workers.dev/setup`
+- The URI must match exactly (including https and no trailing slash)
+- Ensure OAuth consent screen is configured
+- Check that both Gmail and Drive APIs are enabled
+
+**No emails found (0 emails processed)**
+- Gmail API requires the label name with quotes in the query: `label:"insurance claims/todo"`
+- Do NOT use the label ID - use the exact label name
+- Verify the Gmail labels exist exactly as: `insurance claims/todo` and `insurance claims/processed`
+- Labels are case-sensitive and must include the forward slash
+- Check that emails have the correct label applied
+- Add `includeSpamTrash: true` to search if emails might be in spam/trash
+
+**Attachments not detected (0 files uploaded despite attachments)**
+- Gmail API requires `?format=full` parameter to get attachment metadata
+- Without this, the API returns minimal data without attachment info
+- This is automatically handled in the current version
+
+**Files uploading to wrong folder structure**
+- If DRIVE_FOLDER_ID is set: Files go directly to that folder with year subfolders
+- If DRIVE_FOLDER_ID is not set: Creates "Gmail Attachments" folder first
+- The service uses the specified folder ID directly without creating intermediate folders
+
+**Drive upload 400 Bad Request errors**
+- Gmail attachments use URL-safe base64 encoding (with `-` and `_` characters)
+- Must convert to standard base64 (with `+` and `/` characters) before uploading
+- Use FormData for multipart uploads instead of manual boundary construction
+- Maximum file size is 25MB by default
+
+**"Method not allowed" error**
+- The `/process` endpoint requires a POST request: `curl -X POST https://your-worker.workers.dev/process`
+- GET requests will return 405 error
+
+### Debug Mode
+
+Debug mode controls access to web endpoints:
+
+**When `DEBUG_MODE=false` (default/production)**:
+- Only `/` endpoint is accessible (returns basic info)
+- All other endpoints return 404
+- Worker runs only via cron schedule
+- This is the secure production configuration
+
+**When `DEBUG_MODE=true` (development/setup)**:
+- `/health` - Check worker health and configuration
+- `/setup` - OAuth setup flow (required for initial setup)
+- `/process` - Manual processing trigger (POST request)
+- `/status` - View last run status and statistics
+- `/logs` - View recent error logs
+- `/debug-labels` - Debug Gmail label queries (useful for troubleshooting)
+
+**Security Warning**: Always set `DEBUG_MODE=false` in production to prevent unauthorized access to sensitive endpoints.
+
+**To temporarily enable for setup**:
+```bash
+# Enable debug mode
+echo "true" | npx wrangler secret put DEBUG_MODE
+
+# After setup, disable it
+echo "false" | npx wrangler secret put DEBUG_MODE
+# Or delete the secret entirely (defaults to false)
+npx wrangler secret delete DEBUG_MODE
+```
+
+### Monitoring
+
+**View logs in real-time:**
+```bash
+npx wrangler tail
+```
+
+**Check worker metrics:**
+```bash
+npx wrangler metrics
+```
+
+**Enable observability in wrangler.toml:**
+```toml
+[observability]
+enabled = true
+```
 
 ## License
 
-This project is licensed under the MIT License.
+MIT

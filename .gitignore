@@ -1,40 +1,30 @@
-# Deno specific
-/deno.lock
+# Dependencies
+node_modules/
 
-# Environment variables
+# Build output
+dist/
+.wrangler/
+
+# Environment files
 .env
+.env.local
+.dev.vars
 
-# Config files with sensitive information
-/data/config.json
-/data/config.encrypted
-/data/.secret_key
+# Test coverage
+coverage/
 
-# OAuth and credentials
-config.json
-credentials.json
-client_secret*.json
-token.json
-uploaded_files.json
-
-# OS specific
-.DS_Store
-Thumbs.db
-
-# IDE specific
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# Debug logs
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-debug.log
+# OS
+.DS_Store
+Thumbs.db
 
-# Generated directories
-dist/
-build/
-out/
+# Logs
+*.log
 
-temp_attachments/
+# CloudFlare
+.mf/
