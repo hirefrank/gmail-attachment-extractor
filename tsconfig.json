@@ -3,20 +3,26 @@
     "target": "ES2022",
     "module": "ES2022",
     "lib": ["ES2022"],
-    "jsx": "react-jsx",
     "moduleResolution": "bundler",
     "moduleDetection": "force",
-    "allowImportingTsExtensions": true,
+    "allowImportingTsExtensions": false,
     "strict": true,
     "skipLibCheck": true,
     "allowSyntheticDefaultImports": true,
     "forceConsistentCasingInFileNames": true,
     "allowJs": false,
-    "noEmit": true,
+    "outDir": "./dist",
+    "rootDir": ".",
+    "noEmit": false,
     "types": ["@cloudflare/workers-types", "node"],
     "isolatedModules": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "baseUrl": "."
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "*.d.ts"],
-  "exclude": ["node_modules", "dist", ".wrangler"]
+  "include": ["src/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts", "*.d.ts"],
+  "exclude": ["node_modules", "dist", ".wrangler", "**/*.test.ts"],
+  "ts-node": {
+    "esm": true,
+    "experimentalSpecifierResolution": "node"
+  }
 }

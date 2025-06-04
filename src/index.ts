@@ -1,6 +1,6 @@
 /**
  * Gmail Attachment Extractor - CloudFlare Worker
- * 
+ *
  * This worker automatically extracts attachments from Gmail emails with specific labels,
  * uploads them to Google Drive, and manages email labels for processing status.
  */
@@ -33,25 +33,25 @@ import type { ProcessorConfig } from './types/processor';
 class Logger {
   private logLevel: string;
   private requestId?: string;
-  
+
   constructor(logLevel: string = 'info', requestId?: string) {
     this.logLevel = logLevel.toLowerCase();
     this.requestId = requestId;
   }
-  
+
   private shouldLog(level: string): boolean {
     const levels = ['error', 'warn', 'info', 'debug'];
     const currentLevelIndex = levels.indexOf(this.logLevel);
     const messageLevelIndex = levels.indexOf(level);
     return messageLevelIndex <= currentLevelIndex;
   }
-  
+
   private formatMessage(level: string, message: string): string {
     const timestamp = new Date().toISOString();
     const requestIdPart = this.requestId ? ` [${this.requestId}]` : '';
     return `[${timestamp}] [${level.toUpperCase()}]${requestIdPart} ${message}`;
   }
-  
+
   error(message: string, error?: any) {
     if (this.shouldLog('error')) {
       const formattedMessage = this.formatMessage('error', message);
@@ -62,19 +62,19 @@ class Logger {
       }
     }
   }
-  
+
   warn(message: string) {
     if (this.shouldLog('warn')) {
       console.warn(this.formatMessage('warn', message));
     }
   }
-  
+
   info(message: string) {
     if (this.shouldLog('info')) {
       console.log(this.formatMessage('info', message));
     }
   }
-  
+
   debug(message: string) {
     if (this.shouldLog('debug')) {
       console.log(this.formatMessage('debug', message));
@@ -115,25 +115,25 @@ export default {
     const requestId = generateRequestId();
     let config: ValidatedConfig;
     let logger: Logger;
-    
+
     try {
       // Load and validate configuration
       config = loadConfiguration(env);
       logger = new Logger(config.logLevel, requestId);
-      
+
       // Store config globally for other handlers
       globalConfig = config;
-      
+
       logger.debug(`Processing ${request.method} request to ${new URL(request.url).pathname}`);
-      
+
       // Services are initialized lazily when needed
-      
+
       // Log configuration on first request
       if (new URL(request.url).pathname === '/health') {
         logConfigurationStatus(config, logger);
         logger.info('Storage service initialized');
         logger.info('Authentication service initialized');
-        
+
         // Validate utility functions on health check
         logger.debug('Validating utility functions...');
         const testDate = parseEmailDate('2024-01-01');
@@ -142,11 +142,11 @@ export default {
         const testFilename = formatFilename('01', 'Test', 'file.pdf');
         const testDuration = formatDuration(1500);
         const testRetryable = isRetryableError(new Error('network timeout'));
-        
+
         if (testDate && testSender && testError && testFilename && testDuration && typeof testRetryable === 'boolean') {
           logger.debug('Utility functions validated successfully');
         }
-        
+
         // Initialize Gmail service for validation
         const gmailConfig: GmailServiceConfig = {
           maxAttachmentSize: config.maxAttachmentSize,
@@ -156,7 +156,7 @@ export default {
         };
         const gmailService = new GmailService(gmailConfig, logger);
         logger.debug('Gmail service initialized successfully');
-        
+
         // Initialize Drive service for validation
         const driveConfig: DriveServiceConfig = {
           rootFolderId: config.driveFolderId,
@@ -170,52 +170,52 @@ export default {
       // Handle configuration errors before logger is available
       console.error('[ERROR] Configuration loading failed:', error);
       if (error instanceof ConfigurationError) {
-        return new Response(`Configuration Error: ${error.message}`, { 
+        return new Response(`Configuration Error: ${error.message}`, {
           status: 500,
           headers: { 'Content-Type': 'text/plain' }
         });
       }
       return new Response('Internal server error', { status: 500 });
     }
-    
+
     try {
       const url = new URL(request.url);
-      
+
       // Route handling
       switch (url.pathname) {
         case '/':
           return new Response('Gmail Attachment Extractor - CloudFlare Worker', {
             headers: { 'Content-Type': 'text/plain' }
           });
-          
+
         case '/health':
           return await handleHealthCheck(env, logger);
-          
+
         case '/setup':
           // OAuth setup endpoint
           return await handleOAuthSetup(request, getOrCreateAuthService(env, config), logger);
-          
+
         case '/process':
           // Manual trigger endpoint
           if (request.method !== 'POST') {
             return new Response('Method not allowed', { status: 405 });
           }
           return await handleManualProcess(env, config, logger);
-          
+
         case '/status':
           // Status endpoint
           return await handleStatus(getOrCreateStorageService(env), logger);
-          
+
         case '/logs':
           // Error logs endpoint
           return await handleErrorLogs(getOrCreateStorageService(env), logger);
-          
+
         default:
           return new Response('Not found', { status: 404 });
       }
     } catch (error) {
       logger.error('Request handler error:', error);
-      
+
       // Store critical errors in KV
       try {
         const storage = getOrCreateStorageService(env);
@@ -230,18 +230,18 @@ export default {
       } catch (logError) {
         // Ignore logging errors
       }
-      
+
       return new Response(JSON.stringify({
         error: 'Internal server error',
         requestId,
         message: error instanceof Error ? error.message : 'Unknown error'
-      }), { 
+      }), {
         status: 500,
         headers: { 'Content-Type': 'application/json' }
       });
     }
   },
-  
+
   // Cron handler for scheduled execution
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     const executionId = `cron_${Date.now()}`;
@@ -252,19 +252,19 @@ export default {
     let gmailService: GmailService;
     let driveService: DriveService;
     let processorService: ProcessorService;
-    
+
     try {
       // Load and validate configuration
       config = loadConfiguration(env);
       logger = new Logger(config.logLevel, executionId);
       globalConfig = config;
-      
+
       logger.info(`Cron execution started - Event: ${event.cron}, Scheduled: ${new Date(event.scheduledTime).toISOString()}`);
-      
+
       // Initialize services for cron execution
       storageService = new StorageService(env.STORAGE);
       authService = new AuthService(storageService, config.googleClientId, config.googleClientSecret);
-      
+
       // Initialize Gmail service
       const gmailConfig: GmailServiceConfig = {
         maxAttachmentSize: config.maxAttachmentSize,
@@ -273,7 +273,7 @@ export default {
         errorLabel: config.errorLabel
       };
       gmailService = new GmailService(gmailConfig, logger);
-      
+
       // Initialize Drive service
       const driveConfig: DriveServiceConfig = {
         rootFolderId: config.driveFolderId,
@@ -281,7 +281,7 @@ export default {
         defaultMimeType: 'application/octet-stream'
       };
       driveService = new DriveService(driveConfig, logger);
-      
+
       // Initialize Processor service
       const processorConfig: ProcessorConfig = {
         maxEmailsPerRun: config.maxEmailsPerRun,
@@ -297,14 +297,14 @@ export default {
         driveService,
         logger
       );
-      
+
       logConfigurationStatus(config, logger);
       logger.info('Storage service initialized for scheduled execution');
       logger.info('Authentication service initialized for scheduled execution');
       logger.info('Gmail service initialized for scheduled execution');
       logger.info('Drive service initialized for scheduled execution');
       logger.info('Processor service initialized for scheduled execution');
-      
+
       // Validate tokens
       const tokenStatus = await authService.validateTokens();
       if (!tokenStatus.hasTokens) {
@@ -332,35 +332,35 @@ export default {
       }
       return;
     }
-    
+
     const startTime = Date.now();
-    
+
     try {
-      
+
       // Main processing logic
       logger.info('Starting email processing...');
-      
+
       // Process emails using the processor service
       const report = await processorService.processEmails();
-      
+
       logger.info(
         `Processing completed: ${report.successfulEmails}/${report.totalEmails} emails successful, ` +
         `${report.totalFilesUploaded} files uploaded in ${report.totalProcessingTime}ms`
       );
-      
+
       if (report.errors.length > 0) {
         logger.warn(`${report.errors.length} errors occurred during processing`);
         report.errors.forEach(error => {
           logger.error(`Email ${error.emailId}: ${error.error}`);
         });
       }
-      
+
       const duration = Date.now() - startTime;
       logger.info(`Scheduled execution completed successfully in ${duration}ms`);
     } catch (error) {
       const duration = Date.now() - startTime;
       logger.error(`Scheduled execution failed after ${duration}ms:`, error);
-      
+
       // Store error in KV for monitoring
       await storageService.appendErrorLog({
         timestamp: new Date().toISOString(),
@@ -386,7 +386,7 @@ async function handleHealthCheck(env: Env, logger: Logger): Promise<Response> {
       storageService: false
     }
   };
-  
+
   // Check configuration validity
   try {
     const config = loadConfiguration(env);
@@ -397,7 +397,7 @@ async function handleHealthCheck(env: Env, logger: Logger): Promise<Response> {
     health.checks.configuration = false;
     health.checks.environment = false;
   }
-  
+
   // Check KV storage connectivity
   try {
     await env.STORAGE.put('health_check', new Date().toISOString(), { expirationTtl: 60 });
@@ -407,7 +407,7 @@ async function handleHealthCheck(env: Env, logger: Logger): Promise<Response> {
     logger.error('KV storage health check failed:', error);
     health.checks.storage = false;
   }
-  
+
   // Check storage service health
   try {
     const service = getOrCreateStorageService(env);
@@ -416,12 +416,12 @@ async function handleHealthCheck(env: Env, logger: Logger): Promise<Response> {
     logger.error('Storage service health check failed:', error);
     health.checks.storageService = false;
   }
-  
+
   // Determine overall health status
   if (!health.checks.configuration || !health.checks.environment || !health.checks.storage || !health.checks.storageService) {
     health.status = 'unhealthy';
   }
-  
+
   return new Response(JSON.stringify(health, null, 2), {
     status: health.status === 'healthy' ? 200 : 503,
     headers: { 'Content-Type': 'application/json' }
@@ -436,14 +436,14 @@ async function handleStatus(storage: StorageService, logger: Logger): Promise<Re
       storage.getProcessingStatus(),
       storage.getErrorLogs(10)
     ]);
-    
+
     const status = {
       lastRun: lastRun || 'Never',
       lastStatus: processingStatus || null,
       recentErrors: recentErrors.length,
       storageHealth: await storage.isHealthy()
     };
-    
+
     return new Response(JSON.stringify(status, null, 2), {
       headers: { 'Content-Type': 'application/json' }
     });
@@ -452,7 +452,7 @@ async function handleStatus(storage: StorageService, logger: Logger): Promise<Re
     return new Response(JSON.stringify({
       error: 'Error retrieving status',
       message: error instanceof Error ? error.message : String(error)
-    }), { 
+    }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
     });
@@ -463,25 +463,43 @@ async function handleStatus(storage: StorageService, logger: Logger): Promise<Re
 async function handleOAuthSetup(request: Request, auth: AuthService, logger: Logger): Promise<Response> {
   const url = new URL(request.url);
   
+  // Check authorization for /setup endpoint
+  const config = globalConfig;
+  if (config?.setupAuthToken) {
+    const authHeader = request.headers.get('Authorization');
+    const providedToken = authHeader?.replace('Bearer ', '').trim();
+    
+    if (!providedToken || providedToken !== config.setupAuthToken) {
+      logger.warn('Unauthorized /setup access attempt');
+      return new Response('Unauthorized', { 
+        status: 401,
+        headers: { 
+          'WWW-Authenticate': 'Bearer realm="OAuth Setup"',
+          'Content-Type': 'text/plain'
+        }
+      });
+    }
+  }
+
   // Handle OAuth callback
   if (url.searchParams.has('code')) {
     try {
       const code = url.searchParams.get('code')!;
       const error = url.searchParams.get('error');
-      
+
       if (error) {
         return new Response(`OAuth error: ${error} - ${url.searchParams.get('error_description') || 'Unknown error'}`, {
           status: 400,
           headers: { 'Content-Type': 'text/plain' }
         });
       }
-      
+
       // Exchange code for tokens
       const redirectUri = `${url.origin}/setup`;
       await auth.exchangeCodeForTokens(code, redirectUri);
-      
+
       logger.info('OAuth setup completed successfully');
-      
+
       return new Response(`
         <html>
           <head>
@@ -513,25 +531,25 @@ async function handleOAuthSetup(request: Request, auth: AuthService, logger: Log
       });
     } catch (error) {
       logger.error('OAuth setup failed:', error);
-      
+
       let errorMessage = 'OAuth setup failed: ';
       if (error instanceof AuthError) {
         errorMessage += error.message;
       } else {
         errorMessage += 'Unknown error';
       }
-      
+
       return new Response(errorMessage, {
         status: 500,
         headers: { 'Content-Type': 'text/plain' }
       });
     }
   }
-  
+
   // Show OAuth initialization page
   try {
     const tokenStatus = await auth.validateTokens();
-    
+
     if (tokenStatus.hasTokens && !tokenStatus.isExpired) {
       return new Response(`
         <html>
@@ -560,24 +578,24 @@ async function handleOAuthSetup(request: Request, auth: AuthService, logger: Log
         headers: { 'Content-Type': 'text/html' }
       });
     }
-    
+
     // Generate authorization URL
     const redirectUri = `${url.origin}/setup`;
     const authUrl = auth.getAuthorizationUrl(redirectUri);
-    
+
     return new Response(`
       <html>
         <head>
           <title>OAuth Setup - Gmail Attachment Extractor</title>
           <style>
             body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
-            .button { 
-              display: inline-block; 
-              padding: 10px 20px; 
-              background: #4285f4; 
-              color: white; 
-              text-decoration: none; 
-              border-radius: 5px; 
+            .button {
+              display: inline-block;
+              padding: 10px 20px;
+              background: #4285f4;
+              color: white;
+              text-decoration: none;
+              border-radius: 5px;
               margin: 20px 0;
             }
             .button:hover { background: #357ae8; }
@@ -588,7 +606,7 @@ async function handleOAuthSetup(request: Request, auth: AuthService, logger: Log
         <body>
           <h1>OAuth Setup - Gmail Attachment Extractor</h1>
           <p>To use this service, you need to authorize access to your Gmail and Google Drive.</p>
-          
+
           <div class="info">
             <h3>Permissions Required:</h3>
             <ul>
@@ -596,12 +614,12 @@ async function handleOAuthSetup(request: Request, auth: AuthService, logger: Log
               <li><strong>Google Drive:</strong> Create and manage files created by this app</li>
             </ul>
           </div>
-          
+
           <p>Click the button below to begin the authorization process:</p>
-          
+
           <a href="${authUrl}" class="button">Authorize with Google</a>
-          
-          <p class="warning">⚠️ Make sure you trust this application before proceeding.</p>
+
+          <p class="warning">Make sure you trust this application before proceeding.</p>
         </body>
       </html>
     `, {
@@ -623,11 +641,11 @@ async function handleManualProcess(
 ): Promise<Response> {
   try {
     logger.info('Manual process triggered');
-    
+
     // Initialize services
     const storageService = new StorageService(env.STORAGE);
     const authService = new AuthService(storageService, config.googleClientId, config.googleClientSecret);
-    
+
     // Check if we have valid tokens
     const tokenStatus = await authService.validateTokens();
     if (!tokenStatus.hasTokens) {
@@ -639,7 +657,7 @@ async function handleManualProcess(
         headers: { 'Content-Type': 'application/json' }
       });
     }
-    
+
     // Initialize Gmail and Drive services
     const gmailConfig: GmailServiceConfig = {
       maxAttachmentSize: config.maxAttachmentSize,
@@ -648,14 +666,14 @@ async function handleManualProcess(
       errorLabel: config.errorLabel
     };
     const gmailService = new GmailService(gmailConfig, logger);
-    
+
     const driveConfig: DriveServiceConfig = {
       rootFolderId: config.driveFolderId,
       maxFileSize: config.maxAttachmentSize,
       defaultMimeType: 'application/octet-stream'
     };
     const driveService = new DriveService(driveConfig, logger);
-    
+
     // Initialize processor
     const processorConfig: ProcessorConfig = {
       maxEmailsPerRun: config.maxEmailsPerRun,
@@ -671,10 +689,10 @@ async function handleManualProcess(
       driveService,
       logger
     );
-    
+
     // Process emails
     const report = await processorService.processEmails();
-    
+
     return new Response(JSON.stringify({
       success: true,
       report: {
@@ -708,7 +726,7 @@ async function handleErrorLogs(storage: StorageService, logger: Logger): Promise
   try {
     const limit = 50; // Default to last 50 errors
     const errorLogs = await storage.getErrorLogs(limit);
-    
+
     return new Response(JSON.stringify({
       count: errorLogs.length,
       limit,
@@ -729,7 +747,7 @@ async function handleErrorLogs(storage: StorageService, logger: Logger): Promise
     return new Response(JSON.stringify({
       error: 'Failed to retrieve error logs',
       message: error instanceof Error ? error.message : String(error)
-    }), { 
+    }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
     });

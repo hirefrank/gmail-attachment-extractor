@@ -9,3 +9,4 @@ GOOGLE_CLIENT_SECRET=your-google-client-secret
 LOG_LEVEL=info                # Options: error, warn, info, debug
 MAX_EMAILS_PER_RUN=50         # Maximum emails to process per run
 MAX_FILE_SIZE_MB=25           # Maximum file size in MB
+

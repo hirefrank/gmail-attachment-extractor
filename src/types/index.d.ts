@@ -8,6 +8,7 @@ export interface Env {
   MAX_EMAILS_PER_RUN?: string;
   MAX_FILE_SIZE_MB?: string;
   DRIVE_FOLDER_ID?: string;
+  SETUP_AUTH_TOKEN?: string;
   
   // KV namespace binding
   STORAGE: KVNamespace;

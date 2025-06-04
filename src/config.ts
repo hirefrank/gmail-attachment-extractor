@@ -46,6 +46,7 @@ export interface ValidatedConfig {
   processedLabel: string;
   errorLabel: string;
   driveFolderId?: string;
+  setupAuthToken?: string;
 }
 
 // Configuration validation errors
@@ -97,7 +98,8 @@ export function loadConfiguration(env: Env): ValidatedConfig {
     requiredLabel: CONFIG.LABELS.SOURCE,
     processedLabel: CONFIG.LABELS.PROCESSED,
     errorLabel: 'ProcessingError', // Default error label
-    driveFolderId: env.DRIVE_FOLDER_ID?.trim() // Optional Drive folder ID
+    driveFolderId: env.DRIVE_FOLDER_ID?.trim(), // Optional Drive folder ID
+    setupAuthToken: env.SETUP_AUTH_TOKEN?.trim() // Optional setup auth token
   };
 }
 

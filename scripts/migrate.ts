@@ -5,9 +5,9 @@
  * including data migration and service cutover.
  */
 
-import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { join } from 'path';
-import { execSync } from 'child_process';
+import { promises as fs } from 'node:fs';
+import * as path from 'node:path';
+import { execSync } from 'node:child_process';
 
 interface MigrationData {
   uploadedFiles: string[];
@@ -44,12 +44,12 @@ interface KVNamespace {
 class DataMigrator {
   private sourceDataPath: string;
   private kvNamespace: string;
-  private environment: 'staging' | 'production';
+  private environment: 'production';
 
   constructor(
     sourceDataPath: string, 
     kvNamespace: string, 
-    environment: 'staging' | 'production' = 'staging'
+    environment: 'production' = 'production'
   ) {
     this.sourceDataPath = sourceDataPath;
     this.kvNamespace = kvNamespace;
@@ -61,7 +61,7 @@ class DataMigrator {
     
     try {
       // Load existing data
-      const data = this.loadExistingData();
+      const data = await this.loadExistingData();
       
       // Validate data
       this.validateData(data);
@@ -80,7 +80,7 @@ class DataMigrator {
     }
   }
 
-  private loadExistingData(): MigrationData {
+  private async loadExistingData(): Promise<MigrationData> {
     console.log('📂 Loading existing data...');
     
     const data: MigrationData = {
@@ -94,54 +94,54 @@ class DataMigrator {
     };
 
     // Load uploaded files
-    const uploadedFilesPath = join(this.sourceDataPath, 'uploaded_files.json');
-    if (existsSync(uploadedFilesPath)) {
-      try {
-        const uploadedFiles = JSON.parse(readFileSync(uploadedFilesPath, 'utf-8'));
-        data.uploadedFiles = Array.isArray(uploadedFiles) ? uploadedFiles : [];
-        console.log(`✓ Loaded ${data.uploadedFiles.length} uploaded files`);
-      } catch (error) {
+    const uploadedFilesPath = path.join(this.sourceDataPath, 'uploaded_files.json');
+    try {
+      const uploadedFiles = JSON.parse(await fs.readFile(uploadedFilesPath, 'utf-8'));
+      data.uploadedFiles = Array.isArray(uploadedFiles) ? uploadedFiles : [];
+      console.log(`✓ Loaded ${data.uploadedFiles.length} uploaded files`);
+    } catch (error: any) {
+      if (error.code !== 'ENOENT') {
         console.warn(`⚠ Could not load uploaded files: ${error}`);
       }
     }
 
     // Load OAuth tokens
-    const tokensPath = join(this.sourceDataPath, 'oauth_tokens.json');
-    if (existsSync(tokensPath)) {
-      try {
-        const tokens = JSON.parse(readFileSync(tokensPath, 'utf-8'));
-        data.oauthTokens = {
-          access_token: tokens.access_token || '',
-          refresh_token: tokens.refresh_token || '',
-          expiry_date: tokens.expiry_date || 0,
-          token_type: tokens.token_type || 'Bearer',
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        };
-        console.log('✓ Loaded OAuth tokens');
-      } catch (error) {
+    const tokensPath = path.join(this.sourceDataPath, 'oauth_tokens.json');
+    try {
+      const tokens = JSON.parse(await fs.readFile(tokensPath, 'utf-8'));
+      data.oauthTokens = {
+        access_token: tokens.access_token || '',
+        refresh_token: tokens.refresh_token || '',
+        expiry_date: tokens.expiry_date || 0,
+        token_type: tokens.token_type || 'Bearer',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+      console.log('✓ Loaded OAuth tokens');
+    } catch (error: any) {
+      if (error.code !== 'ENOENT') {
         console.warn(`⚠ Could not load OAuth tokens: ${error}`);
       }
     }
 
     // Load processing status
-    const statusPath = join(this.sourceDataPath, 'processing_status.json');
-    if (existsSync(statusPath)) {
-      try {
-        data.processingStatus = JSON.parse(readFileSync(statusPath, 'utf-8'));
-        console.log('✓ Loaded processing status');
-      } catch (error) {
+    const statusPath = path.join(this.sourceDataPath, 'processing_status.json');
+    try {
+      data.processingStatus = JSON.parse(await fs.readFile(statusPath, 'utf-8'));
+      console.log('✓ Loaded processing status');
+    } catch (error: any) {
+      if (error.code !== 'ENOENT') {
         console.warn(`⚠ Could not load processing status: ${error}`);
       }
     }
 
     // Load error logs
-    const errorLogsPath = join(this.sourceDataPath, 'error_logs.json');
-    if (existsSync(errorLogsPath)) {
-      try {
-        data.errorLogs = JSON.parse(readFileSync(errorLogsPath, 'utf-8'));
-        console.log(`✓ Loaded ${data.errorLogs?.length || 0} error logs`);
-      } catch (error) {
+    const errorLogsPath = path.join(this.sourceDataPath, 'error_logs.json');
+    try {
+      data.errorLogs = JSON.parse(await fs.readFile(errorLogsPath, 'utf-8'));
+      console.log(`✓ Loaded ${data.errorLogs?.length || 0} error logs`);
+    } catch (error: any) {
+      if (error.code !== 'ENOENT') {
         console.warn(`⚠ Could not load error logs: ${error}`);
       }
     }
@@ -290,7 +290,7 @@ class DataMigrator {
       }
     }
     
-    writeFileSync(outputPath, JSON.stringify(exportData, null, 2));
+    await fs.writeFile(outputPath, JSON.stringify(exportData, null, 2));
     console.log(`✅ Data exported to ${outputPath}`);
   }
 
@@ -298,19 +298,22 @@ class DataMigrator {
   async rollback(backupPath: string): Promise<void> {
     console.log('🔄 Rolling back migration...');
     
-    if (!existsSync(backupPath)) {
-      throw new Error(`Backup file not found: ${backupPath}`);
+    try {
+        const backupData = JSON.parse(await fs.readFile(backupPath, 'utf-8'));
+      
+      // Clear KV data
+      await this.clearKVData();
+      
+      // Restore from backup
+      await this.migrateToKV(backupData);
+      
+      console.log('✅ Migration rollback completed');
+    } catch (error: any) {
+      if (error.code === 'ENOENT') {
+        throw new Error(`Backup file not found: ${backupPath}`);
+      }
+      throw error;
     }
-    
-    const backupData = JSON.parse(readFileSync(backupPath, 'utf-8'));
-    
-    // Clear KV data
-    await this.clearKVData();
-    
-    // Restore from backup
-    await this.migrateToKV(backupData);
-    
-    console.log('✅ Migration rollback completed');
   }
 
   private async clearKVData(): Promise<void> {
@@ -332,9 +335,9 @@ class DataMigrator {
 
 // Service Cutover Management
 class ServiceCutover {
-  private environment: 'staging' | 'production';
-  
-  constructor(environment: 'staging' | 'production' = 'staging') {
+  private environment: 'production';
+
+  constructor(environment: 'production' = 'production') {
     this.environment = environment;
   }
 
@@ -391,7 +394,9 @@ class ServiceCutover {
     
     try {
       // Verify CloudFlare Worker is healthy
-      await this.verifyWorkerHealth();
+      if (!(await this.verifyWorkerHealth())) {
+        throw new Error('CloudFlare Worker is not healthy');
+      }
       
       // Stop Deno service (implementation depends on deployment method)
       console.log('🛑 Stopping Deno service...');
@@ -408,20 +413,15 @@ class ServiceCutover {
     }
   }
 
-  private async verifyWorkerHealth(): Promise<void> {
-    const workerUrl = this.getWorkerUrl();
-    
-    const response = await fetch(`${workerUrl}/health`);
-    if (!response.ok) {
-      throw new Error(`Worker health check failed: ${response.status}`);
+  private async verifyWorkerHealth(): Promise<boolean> {
+    try {
+      const response = await fetch(`${this.getWorkerUrl()}/health`);
+      const health: { status: string } = await response.json();
+      return health.status === 'ok';
+    } catch (error) {
+      console.error('Health check failed:', error);
+      return false;
     }
-    
-    const health = await response.json();
-    if (health.status !== 'healthy') {
-      throw new Error(`Worker reports unhealthy status: ${health.status}`);
-    }
-    
-    console.log('✓ CloudFlare Worker is healthy and ready');
   }
 
   private async verifyCutover(): Promise<void> {
@@ -445,63 +445,56 @@ async function main() {
   const args = process.argv.slice(2);
   const command = args[0];
   
+  // Default KV namespace from wrangler.toml or use production namespace
+  const defaultKvNamespace = 'gmail-extractor-prod';
+  
   switch (command) {
     case 'migrate':
       const sourcePath = args[1] || './data';
-      const kvNamespace = args[2] || 'gmail-extractor-staging';
-      const environment = (args[3] as 'staging' | 'production') || 'staging';
-      
-      const migrator = new DataMigrator(sourcePath, kvNamespace, environment);
+      const migrator = new DataMigrator(sourcePath, defaultKvNamespace, 'production');
       await migrator.migrate();
       break;
       
     case 'export':
-      const exportMigrator = new DataMigrator('', args[2] || 'gmail-extractor-staging');
-      await exportMigrator.exportData(args[1] || './backup.json');
+      const outputPath = args[1] || './backup.json';
+      const exportMigrator = new DataMigrator('', defaultKvNamespace);
+      await exportMigrator.exportData(outputPath);
       break;
       
     case 'rollback':
-      const rollbackMigrator = new DataMigrator('', args[2] || 'gmail-extractor-staging');
-      await rollbackMigrator.rollback(args[1] || './backup.json');
-      break;
-      
-    case 'parallel':
-      const cutover = new ServiceCutover((args[1] as 'staging' | 'production') || 'staging');
-      await cutover.parallelRun(parseInt(args[2]) || 60);
-      break;
-      
-    case 'cutover':
-      const cutoverService = new ServiceCutover((args[1] as 'staging' | 'production') || 'staging');
-      await cutoverService.cutover();
+      const backupPath = args[1] || './backup.json';
+      const rollbackMigrator = new DataMigrator('', defaultKvNamespace);
+      await rollbackMigrator.rollback(backupPath);
       break;
       
     default:
       console.log(`
-Usage: node migrate.js <command> [options]
+Gmail Attachment Extractor Migration Tool
+Usage: pnpm run migrate <command> [options]
 
 Commands:
-  migrate <sourcePath> <kvNamespace> [environment]  Migrate data from files to KV
-  export <outputPath> <kvNamespace>                 Export KV data to file
-  rollback <backupPath> <kvNamespace>               Rollback from backup
-  parallel [environment] [minutes]                  Run parallel comparison
-  cutover [environment]                             Perform service cutover
+  migrate [sourcePath]    Migrate data from files to KV storage
+  export [outputPath]     Export KV data to a JSON file
+  rollback [backupPath]   Rollback KV data from a backup file
 
 Examples:
-  node migrate.js migrate ./data gmail-extractor-staging staging
-  node migrate.js export ./backup.json gmail-extractor-production
-  node migrate.js rollback ./backup.json gmail-extractor-production
-  node migrate.js parallel production 120
-  node migrate.js cutover production
+  # Migrate data from default directory
+  pnpm run migrate migrate
+  
+  # Export current KV data to a file
+  pnpm run migrate export ./backup.json
+  
+  # Rollback from a backup file
+  pnpm run migrate rollback ./backup.json
       `);
       process.exit(1);
   }
 }
 
-if (require.main === module) {
-  main().catch(error => {
-    console.error('Migration script failed:', error);
-    process.exit(1);
-  });
-}
+// Run main function if this script is executed directly
+main().catch(error => {
+  console.error('Migration script failed:', error);
+  process.exit(1);
+});
 
 export { DataMigrator, ServiceCutover };
