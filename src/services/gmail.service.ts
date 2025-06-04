@@ -83,7 +83,8 @@ export class GmailService {
     accessToken: string, 
     messageId: string
   ): Promise<EmailMessage | null> {
-    const url = `${this.baseUrl}/users/me/messages/${messageId}`;
+    // Need to specify format=full to get attachment info
+    const url = `${this.baseUrl}/users/me/messages/${messageId}?format=full`;
     
     try {
       const response = await fetch(url, {
@@ -267,7 +268,16 @@ export class GmailService {
    * Build label-based search query
    */
   buildLabelQuery(labelId: string): string {
+    // Just search for emails with this label
     return `label:${labelId}`;
+  }
+  
+  /**
+   * Build label-based search query using label name
+   */
+  buildLabelQueryByName(labelName: string): string {
+    // Use quotes for labels with special characters
+    return `label:"${labelName}"`;
   }
 
   /**

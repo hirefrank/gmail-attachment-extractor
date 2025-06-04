@@ -133,27 +133,29 @@ export class DriveService {
     request: UploadRequest
   ): Promise<DriveFile> {
     // Create metadata
-    const metadata: FileMetadata = {
+    const metadata = {
       name: request.filename,
-      mimeType: request.mimeType || this.config.defaultMimeType,
-      parents: [request.parentFolderId],
-      description: request.description
+      parents: [request.parentFolderId]
     };
 
-    // Create multipart body
-    const boundary = '-------314159265358979323846';
-    const delimiter = "\r\n--" + boundary + "\r\n";
-    const closeDelimiter = "\r\n--" + boundary + "--";
+    // Convert URL-safe base64 to standard base64 (Gmail uses URL-safe encoding)
+    const standardBase64 = request.data
+      .replace(/-/g, '+')
+      .replace(/_/g, '/');
+    
+    // Convert base64 to blob (matching the working Deno code)
+    const binaryString = atob(standardBase64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    const blob = new Blob([bytes], { type: request.mimeType || this.config.defaultMimeType });
 
-    const multipartBody = 
-      delimiter +
-      'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
-      JSON.stringify(metadata) +
-      delimiter +
-      `Content-Type: ${metadata.mimeType}\r\n` +
-      'Content-Transfer-Encoding: base64\r\n\r\n' +
-      request.data +
-      closeDelimiter;
+    // Use FormData for multipart upload
+    const formData = new FormData();
+    const metadataBlob = new Blob([JSON.stringify(metadata)], { type: 'application/json' });
+    formData.append('metadata', metadataBlob);
+    formData.append('file', blob);
 
     const url = `${this.uploadUrl}/files?uploadType=multipart&fields=id,name,mimeType,size,webViewLink,webContentLink`;
 
@@ -163,10 +165,10 @@ export class DriveService {
       const response = await fetch(url, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': `multipart/related; boundary="${boundary}"`
+          'Authorization': `Bearer ${accessToken}`
+          // Note: Don't set Content-Type header - FormData will set it with boundary
         },
-        body: multipartBody
+        body: formData
       });
 
       if (!response.ok) {
@@ -193,33 +195,38 @@ export class DriveService {
     year: string,
     rootFolderName: string = 'Gmail Attachments'
   ): Promise<FolderInfo> {
-    // First, get or create root folder
-    let rootFolder: FolderInfo;
-    const rootFolders = await this.searchFolders(accessToken, {
-      name: rootFolderName,
-      parentId: this.config.rootFolderId
-    });
-
-    if (rootFolders.length > 0) {
-      rootFolder = {
-        id: rootFolders[0].id,
-        name: rootFolders[0].name,
-        webViewLink: rootFolders[0].webViewLink
-      };
-      this.logger.debug(`Found existing root folder: ${rootFolder.name} (${rootFolder.id})`);
+    // If a specific folder ID is provided, use it directly as the root
+    let rootFolderId: string;
+    
+    if (this.config.rootFolderId) {
+      // Use the provided folder directly, no intermediate folder
+      rootFolderId = this.config.rootFolderId;
+      this.logger.debug(`Using provided folder ID as root: ${rootFolderId}`);
     } else {
-      rootFolder = await this.createFolder(
-        accessToken,
-        rootFolderName,
-        this.config.rootFolderId
-      );
-      this.logger.info(`Created root folder: ${rootFolder.name} (${rootFolder.id})`);
+      // Only create "Gmail Attachments" folder if no folder ID was provided
+      const rootFolders = await this.searchFolders(accessToken, {
+        name: rootFolderName,
+        parentId: undefined
+      });
+
+      if (rootFolders.length > 0) {
+        rootFolderId = rootFolders[0].id;
+        this.logger.debug(`Found existing root folder: ${rootFolderName} (${rootFolderId})`);
+      } else {
+        const rootFolder = await this.createFolder(
+          accessToken,
+          rootFolderName,
+          undefined
+        );
+        rootFolderId = rootFolder.id;
+        this.logger.info(`Created root folder: ${rootFolderName} (${rootFolderId})`);
+      }
     }
 
     // Then, get or create year folder
     const yearFolders = await this.searchFolders(accessToken, {
       name: year,
-      parentId: rootFolder.id
+      parentId: rootFolderId
     });
 
     if (yearFolders.length > 0) {
@@ -232,7 +239,7 @@ export class DriveService {
       this.logger.debug(`Found existing year folder: ${yearFolder.name} (${yearFolder.id})`);
       return yearFolder;
     } else {
-      const yearFolder = await this.createFolder(accessToken, year, rootFolder.id);
+      const yearFolder = await this.createFolder(accessToken, year, rootFolderId);
       this.logger.info(`Created year folder: ${yearFolder.name} (${yearFolder.id})`);
       return yearFolder;
     }
@@ -318,6 +325,15 @@ export class DriveService {
     const error = errorData.error;
     const message = error?.message || `Drive API error: ${response.status}`;
     const reason = error?.errors?.[0]?.reason;
+    
+    // Log the full error for debugging
+    this.logger.error('Drive API error details:', {
+      status: response.status,
+      message,
+      reason,
+      errors: error?.errors,
+      fullError: errorData
+    });
 
     throw new DriveApiError(message, response.status, reason);
   }

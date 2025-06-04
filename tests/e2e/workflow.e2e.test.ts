@@ -51,6 +51,7 @@ const createMockEnv = (): Env => ({
   GOOGLE_CLIENT_ID: 'test-client-id',
   GOOGLE_CLIENT_SECRET: 'test-client-secret',
   LOG_LEVEL: 'debug',
+  DEBUG_MODE: 'true',  // Enable debug mode for e2e tests
   STORAGE: {
     put: vi.fn().mockResolvedValue(undefined),
     get: vi.fn().mockImplementation(async (key: string) => {

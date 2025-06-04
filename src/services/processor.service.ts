@@ -69,13 +69,14 @@ export class ProcessorService {
         throw new Error(`Processed label '${this.gmail.config.processedLabel}' not found`);
       }
 
-      // Search for emails
-      const query = this.gmail.buildLabelQuery(labelId);
+      // Search for emails using label name with quotes
+      const query = this.gmail.buildLabelQueryByName(this.gmail.config.requiredLabel);
       this.logger.info(`Searching for emails with query: ${query}`);
       
       const emails = await this.gmail.searchEmails(accessToken, {
         query,
-        maxResults: this.config.maxEmailsPerRun
+        maxResults: this.config.maxEmailsPerRun,
+        includeSpamTrash: true
       });
 
       report.totalEmails = emails.length;

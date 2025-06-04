@@ -19,8 +19,7 @@ This guide covers the complete process for deploying the CloudFlare Workers Gmai
 - [ ] Test OAuth flow completed
 
 ### CloudFlare Configuration
-- [ ] KV namespace created for staging (`gmail-extractor-staging`)
-- [ ] KV namespace created for production (`gmail-extractor-production`)
+- [ ] KV namespace created (`gmail-extractor`)
 - [ ] Environment variables configured in CloudFlare dashboard
 - [ ] Custom domain configured (optional)
 
@@ -44,6 +43,7 @@ GOOGLE_CLIENT_SECRET="your-google-client-secret"
 LOG_LEVEL="info"                    # debug, info, warn, error
 MAX_EMAILS_PER_RUN="50"            # Maximum emails to process per run
 MAX_ATTACHMENT_SIZE="26214400"      # 25MB in bytes
+DEBUG_MODE="false"                 # Set to "true" to enable web endpoints
 ```
 
 ### CloudFlare Secrets
@@ -51,59 +51,36 @@ MAX_ATTACHMENT_SIZE="26214400"      # 25MB in bytes
 Set these in the CloudFlare Workers dashboard or via Wrangler:
 
 ```bash
-# Staging environment
-wrangler secret put GOOGLE_CLIENT_ID --env staging
-wrangler secret put GOOGLE_CLIENT_SECRET --env staging
-
-# Production environment  
-wrangler secret put GOOGLE_CLIENT_ID --env production
-wrangler secret put GOOGLE_CLIENT_SECRET --env production
+wrangler secret put GOOGLE_CLIENT_ID
+wrangler secret put GOOGLE_CLIENT_SECRET
+wrangler secret put DEBUG_MODE  # Set to "false" for production (default)
 ```
 
 ## Deployment Process
 
-### 1. Staging Deployment
+### Deploy to Production
 
 ```bash
-# Deploy to staging
-npm run deploy:staging
+# Build and deploy
+npm run deploy
 
-# Run E2E tests against staging
-npm run test:e2e:staging
+# Run E2E tests
+npm run test:e2e
 
-# Monitor staging for 10 minutes
-npm run monitor:staging -- 10
+# Monitor logs
+wrangler tail
 ```
 
-### 2. Production Deployment
-
-```bash
-# Deploy to production
-npm run deploy:production
-
-# Run E2E tests against production
-npm run test:e2e:production
-
-# Monitor production for 15 minutes
-npm run monitor:production -- 15
-```
-
-### 3. Data Migration (First Time Only)
+### Data Migration (First Time Only)
 
 If migrating from an existing Deno service:
 
 ```bash
 # Export existing data to backup
-npm run migrate:export ./backup.json gmail-extractor-production
+npm run migrate:export ./backup.json
 
 # Migrate data from local files to KV
-npm run migrate ./data gmail-extractor-production production
-
-# Run parallel comparison for 2 hours
-npm run cutover:parallel production 120
-
-# Perform final cutover
-npm run cutover:production
+npm run migrate ./data
 ```
 
 ## Post-Deployment Verification
@@ -113,7 +90,7 @@ npm run cutover:production
 The deployment script automatically verifies:
 - [ ] Worker responds to health checks
 - [ ] All endpoints return expected status codes
-- [ ] Cron trigger is registered
+- [ ] Cron triggers are registered (weekly on Sundays and monthly on 1st)
 - [ ] KV storage is accessible
 
 ### Manual Verification
@@ -194,7 +171,7 @@ Configure alerts for:
 curl https://your-worker.workers.dev/logs
 
 # Monitor real-time logs
-wrangler tail --env production
+wrangler tail
 ```
 
 ## Rollback Procedures
@@ -217,13 +194,13 @@ npm run rollback:production -- v20241201-120000
 
 2. **Via Wrangler CLI**
    ```bash
-   wrangler rollback --env production
+   wrangler rollback
    ```
 
 3. **Data Rollback**
    ```bash
    # Restore from backup
-   npm run migrate:rollback ./backup.json gmail-extractor-production
+   npm run migrate:rollback ./backup.json
    ```
 
 ## Performance Optimization
@@ -248,7 +225,7 @@ npm run rollback:production -- v20241201-120000
 npm run test:e2e -- --grep "Performance"
 
 # Monitor worker metrics
-wrangler metrics --env production
+wrangler metrics
 ```
 
 ## Security Considerations
@@ -266,6 +243,7 @@ wrangler metrics --env production
 - Use service-specific Google accounts
 - Implement rate limiting for manual triggers
 - Monitor for suspicious activity
+- Set DEBUG_MODE=false in production to disable web endpoints
 
 ### Data Protection
 

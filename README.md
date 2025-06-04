@@ -4,13 +4,13 @@ A CloudFlare Worker that automatically extracts attachments from Gmail emails wi
 
 ## Features
 
-- Automated processing on a schedule (default: Weekly on Sunday at midnight UTC)
+- Automated processing on a schedule (default: Weekly on Sundays and monthly on the 1st at midnight UTC)
 - Gmail label-based filtering (processes emails with `insurance claims/todo` label)
 - Organized Google Drive uploads with year-based folders
 - Duplicate file prevention
 - Robust error handling and logging
 - OAuth 2.0 authentication with automatic token refresh
-- Secure OAuth setup endpoint with optional Bearer token protection
+- Debug mode for controlling web endpoint access
 
 ## Project Structure
 
@@ -41,7 +41,7 @@ cf-gmail-extractor/
    ```
    GOOGLE_CLIENT_ID=your-client-id
    GOOGLE_CLIENT_SECRET=your-client-secret
-   SETUP_AUTH_TOKEN=your-secure-token  # Optional: for protecting /setup endpoint
+   DEBUG_MODE=true  # Enable web endpoints for development
    ```
 
 3. Run tests:
@@ -68,7 +68,7 @@ Required secrets (set in Cloudflare):
 ```bash
 npx wrangler secret put GOOGLE_CLIENT_ID      # Your Google OAuth client ID
 npx wrangler secret put GOOGLE_CLIENT_SECRET   # Your Google OAuth client secret
-npx wrangler secret put SETUP_AUTH_TOKEN       # (Optional) Bearer token for /setup endpoint
+npx wrangler secret put DEBUG_MODE             # Set to "true" to enable web endpoints
 ```
 
 Optional configuration (set in `wrangler.toml`):
@@ -77,8 +77,14 @@ Optional configuration (set in `wrangler.toml`):
 LOG_LEVEL = "info"              # Logging level: error, warn, info, debug
 MAX_EMAILS_PER_RUN = "50"       # Maximum emails to process per run
 MAX_FILE_SIZE_MB = "25"         # Maximum attachment size in MB
-DRIVE_FOLDER_ID = "folder-id"   # (Optional) Specific Google Drive folder ID
+DRIVE_FOLDER_ID = "folder-id"   # Google Drive folder ID for uploads
 ```
+
+**Note on DRIVE_FOLDER_ID**: 
+- If specified, files are uploaded directly to this folder (no intermediate "Gmail Attachments" folder)
+- Year subfolders (e.g., "2025") are created inside the specified folder
+- If not specified, creates "Gmail Attachments" folder in Drive root, then year subfolders
+- Get folder ID from the Google Drive URL: `https://drive.google.com/drive/folders/{FOLDER_ID}`
 
 ### CloudFlare KV Namespace
 
@@ -91,12 +97,14 @@ id = "YOUR_KV_NAMESPACE_ID"
 
 ## API Endpoints
 
-- `GET /` - Basic information
-- `GET /health` - Health check endpoint
-- `GET /setup` - OAuth setup flow (protected with optional Bearer token)
-- `POST /process` - Manual processing trigger
-- `GET /status` - Processing status
-- `GET /logs` - View error logs
+- `GET /` - Basic information (always available)
+- `GET /health` - Health check endpoint (requires DEBUG_MODE=true)
+- `GET /setup` - OAuth setup flow (requires DEBUG_MODE=true)
+- `POST /process` - Manual processing trigger (requires DEBUG_MODE=true)
+- `GET /status` - Processing status (requires DEBUG_MODE=true)
+- `GET /logs` - View error logs (requires DEBUG_MODE=true)
+
+**Note:** All endpoints except `/` require `DEBUG_MODE=true` to be accessible. In production, set `DEBUG_MODE=false` to disable web endpoints for security.
 
 ## Deployment
 
@@ -106,33 +114,32 @@ id = "YOUR_KV_NAMESPACE_ID"
 2. Cloudflare account with Workers KV enabled
 3. Google Cloud Project with OAuth 2.0 credentials
 
-### Setup
+### Google API Setup
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project or select existing
+3. Enable Gmail API and Google Drive API
+4. Create OAuth 2.0 credentials (Web application type)
+5. Add authorized redirect URI: `https://your-worker.workers.dev/setup`
+
+### CloudFlare Setup
 
 1. Install dependencies:
    ```bash
    pnpm install
    ```
 
-2. Create a production KV namespace:
+2. Create a KV namespace:
    ```bash
-   npx wrangler kv:namespace create gmail-extractor-prod
+   npx wrangler kv:namespace create STORAGE
    ```
 
-3. Create a preview KV namespace:
-   ```bash
-   npx wrangler kv:namespace create gmail-extractor-preview --preview
-   ```
+3. Update `wrangler.toml` with your KV namespace ID from the output above
 
-4. Update `wrangler.toml` with your KV namespace IDs
-
-5. Set up required secrets:
+4. Set up required secrets:
    ```bash
    npx wrangler secret put GOOGLE_CLIENT_ID
    npx wrangler secret put GOOGLE_CLIENT_SECRET
-   
-   # Optional: Generate and set a secure token for /setup protection
-   # Generate token: openssl rand -base64 32
-   npx wrangler secret put SETUP_AUTH_TOKEN
    ```
 
 ### Deploy
@@ -151,6 +158,31 @@ Your worker will be available at:
 https://gmail-attachment-extractor.YOUR_SUBDOMAIN.workers.dev
 ```
 
+### Post-Deployment
+
+1. **Complete OAuth Setup** (see OAuth Setup section below)
+2. **Verify Cron Schedule**: Check CloudFlare dashboard to ensure both cron triggers are active (Sundays and 1st of month)
+3. **Monitor Initial Run**: Use `wrangler tail` to watch logs during first scheduled execution
+
+### Monitoring
+
+```bash
+# View real-time logs
+wrangler tail
+
+# Check worker metrics
+wrangler metrics
+```
+
+### Troubleshooting
+
+**Common Issues:**
+
+1. **OAuth Token Expired**: Enable debug mode and visit `/setup` to re-authorize
+2. **Gmail API Rate Limits**: Reduce `MAX_EMAILS_PER_RUN` in wrangler.toml
+3. **Drive Upload Failures**: Check file size limits and folder permissions
+4. **Cron Not Triggering**: Verify cron syntax in wrangler.toml
+
 ### Development
 
 ```bash
@@ -168,52 +200,47 @@ pnpm run test:watch
 
 ### Initial Setup
 
-1. **Generate a secure token** (if you want to protect the /setup endpoint):
+1. **Enable debug mode temporarily**:
    ```bash
-   openssl rand -base64 32
+   npx wrangler secret put DEBUG_MODE
+   # Enter "true" when prompted
    ```
 
-2. **Set the token as a secret**:
-   ```bash
-   npx wrangler secret put SETUP_AUTH_TOKEN
-   # Enter the token when prompted
-   ```
+2. **Access the OAuth setup page**:
+   Navigate to `https://your-worker.workers.dev/setup` in your browser
 
-3. **Access the OAuth setup page**:
-   
-   If `SETUP_AUTH_TOKEN` is set:
-   ```bash
-   # Using curl
-   curl -H "Authorization: Bearer YOUR-TOKEN-HERE" https://your-worker.workers.dev/setup
-   ```
-   
-   **Or use a browser with ModHeader extension:**
-   - Install [ModHeader](https://modheader.com/) for Chrome/Firefox
-   - Click the ModHeader icon in your browser
-   - Add a new request header:
-     - Name: `Authorization`
-     - Value: `Bearer YOUR-TOKEN-HERE`
-   - Navigate to `https://your-worker.workers.dev/setup` in your browser
-   - The page will load with proper authentication
-   
-   If no token is set (less secure):
-   ```bash
-   # Simply navigate to the URL in your browser
-   https://your-worker.workers.dev/setup
-   ```
-
-4. **Complete the OAuth flow**:
+3. **Complete the OAuth flow**:
    - Click "Authorize with Google"
    - Grant access to Gmail (read/modify) and Google Drive (file management)
    - You'll be redirected back to the worker with a success message
 
+4. **Disable debug mode for production**:
+   ```bash
+   npx wrangler secret put DEBUG_MODE
+   # Enter "false" when prompted (or delete the secret)
+   ```
+
 ### How It Works
 
-1. The worker processes emails with the label `insurance claims/todo`
-2. Attachments are uploaded to Google Drive (in year-based folders)
-3. Processed emails are moved to `insurance claims/processed`
-4. Files are named: `MM_DD - Sender Name - Original Filename`
-5. Duplicate files are automatically skipped
+1. The worker runs automatically every Sunday and on the 1st of each month at midnight UTC
+2. Searches for emails with the label `insurance claims/todo`
+3. Downloads all attachments from matching emails (requires Gmail API format=full)
+4. Uploads attachments to your specified Google Drive folder:
+   - If DRIVE_FOLDER_ID is set: Creates year subfolders directly in that folder
+   - If not set: Creates "Gmail Attachments" folder in Drive root, then year subfolders
+   - Files are named: `MM_SenderLastName_OriginalFilename`
+5. Moves processed emails to `insurance claims/processed` label
+6. Tracks uploaded files to prevent duplicates
+
+### Gmail Label Requirements
+
+- Create these labels in Gmail before running:
+  - `insurance claims/todo` - for emails to process
+  - `insurance claims/processed` - for completed emails
+- Labels are case-sensitive and must match exactly
+- The forward slash creates a nested label structure in Gmail
+- The worker searches using the full label name with quotes: `label:"insurance claims/todo"`
+- Do not use label IDs in configuration - always use the label name
 
 ## Migration from Existing Service
 
@@ -264,6 +291,102 @@ If you don't have existing data or want to start fresh:
 1. Simply complete the OAuth setup (see above)
 2. The worker will start processing new emails
 3. It will skip any files already in your Drive folder
+
+## Troubleshooting
+
+### Common Issues
+
+**404 errors on endpoints (/setup, /process, /status)**
+- By default, `DEBUG_MODE=false` which disables all web endpoints except `/`
+- Only the cron trigger can run the worker in production
+- To enable web endpoints temporarily: 
+  ```bash
+  echo "true" | npx wrangler secret put DEBUG_MODE
+  ```
+- Remember to disable after setup: `echo "false" | npx wrangler secret put DEBUG_MODE`
+
+**OAuth "Access blocked" or redirect_uri_mismatch**
+- In Google Cloud Console, add the exact redirect URI: `https://your-worker.workers.dev/setup`
+- The URI must match exactly (including https and no trailing slash)
+- Ensure OAuth consent screen is configured
+- Check that both Gmail and Drive APIs are enabled
+
+**No emails found (0 emails processed)**
+- Gmail API requires the label name with quotes in the query: `label:"insurance claims/todo"`
+- Do NOT use the label ID - use the exact label name
+- Verify the Gmail labels exist exactly as: `insurance claims/todo` and `insurance claims/processed`
+- Labels are case-sensitive and must include the forward slash
+- Check that emails have the correct label applied
+- Add `includeSpamTrash: true` to search if emails might be in spam/trash
+
+**Attachments not detected (0 files uploaded despite attachments)**
+- Gmail API requires `?format=full` parameter to get attachment metadata
+- Without this, the API returns minimal data without attachment info
+- This is automatically handled in the current version
+
+**Files uploading to wrong folder structure**
+- If DRIVE_FOLDER_ID is set: Files go directly to that folder with year subfolders
+- If DRIVE_FOLDER_ID is not set: Creates "Gmail Attachments" folder first
+- The service uses the specified folder ID directly without creating intermediate folders
+
+**Drive upload 400 Bad Request errors**
+- Gmail attachments use URL-safe base64 encoding (with `-` and `_` characters)
+- Must convert to standard base64 (with `+` and `/` characters) before uploading
+- Use FormData for multipart uploads instead of manual boundary construction
+- Maximum file size is 25MB by default
+
+**"Method not allowed" error**
+- The `/process` endpoint requires a POST request: `curl -X POST https://your-worker.workers.dev/process`
+- GET requests will return 405 error
+
+### Debug Mode
+
+Debug mode controls access to web endpoints:
+
+**When `DEBUG_MODE=false` (default/production)**:
+- Only `/` endpoint is accessible (returns basic info)
+- All other endpoints return 404
+- Worker runs only via cron schedule
+- This is the secure production configuration
+
+**When `DEBUG_MODE=true` (development/setup)**:
+- `/health` - Check worker health and configuration
+- `/setup` - OAuth setup flow (required for initial setup)
+- `/process` - Manual processing trigger (POST request)
+- `/status` - View last run status and statistics
+- `/logs` - View recent error logs
+- `/debug-labels` - Debug Gmail label queries (useful for troubleshooting)
+
+**Security Warning**: Always set `DEBUG_MODE=false` in production to prevent unauthorized access to sensitive endpoints.
+
+**To temporarily enable for setup**:
+```bash
+# Enable debug mode
+echo "true" | npx wrangler secret put DEBUG_MODE
+
+# After setup, disable it
+echo "false" | npx wrangler secret put DEBUG_MODE
+# Or delete the secret entirely (defaults to false)
+npx wrangler secret delete DEBUG_MODE
+```
+
+### Monitoring
+
+**View logs in real-time:**
+```bash
+npx wrangler tail
+```
+
+**Check worker metrics:**
+```bash
+npx wrangler metrics
+```
+
+**Enable observability in wrangler.toml:**
+```toml
+[observability]
+enabled = true
+```
 
 ## License
 

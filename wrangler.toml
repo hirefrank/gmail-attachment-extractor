@@ -11,16 +11,23 @@ routes = [
 
 # Production variables
 [vars]
-LOG_LEVEL = "warn"
+LOG_LEVEL = "debug"
 ENVIRONMENT = "production"
+DRIVE_FOLDER_ID = "1iuEoIWKIWAdfKRpX0hxvhJRQQMMp0emc"
+# DEBUG_MODE should be set as a secret for security
 
 # Production KV Namespace
 [[kv_namespaces]]
 binding = "STORAGE"
 id = "6477ceccc84c496898355abca55b676f"
 
-# Production cron trigger - Every Sunday at midnight UTC
-# Try Sunday as "SUN" instead of "0" to avoid ambiguity
+# Production cron triggers
+# - Every Sunday at midnight UTC
+# - First day of every month at midnight UTC
 [triggers]
-crons = ["0 0 * * SUN"]
+crons = ["0 0 * * SUN", "0 0 1 * *"]
+
+# Observability
+[observability]
+enabled = true
 

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import worker from '../../src/index';
 import type { Env } from '../../src/types';
 
-// Mock environment for testing
+// Mock environment for testing (DEBUG_MODE defaults to false)
 const mockEnv: Env = {
   GOOGLE_CLIENT_ID: 'test-client-id',
   GOOGLE_CLIENT_SECRET: 'test-client-secret',
@@ -13,6 +13,12 @@ const mockEnv: Env = {
     delete: async () => {},
     list: async () => ({ keys: [], list_complete: true, cursor: undefined })
   } as any
+};
+
+// Mock environment with debug mode enabled
+const mockEnvWithDebug: Env = {
+  ...mockEnv,
+  DEBUG_MODE: 'true'
 };
 
 const mockContext = {
@@ -41,9 +47,15 @@ describe('Worker HTTP Handler', () => {
     expect(text).toBe('Gmail Attachment Extractor - CloudFlare Worker');
   });
   
-  it('should handle health check endpoint', async () => {
+  it('should return 404 for health check endpoint without debug mode', async () => {
     const request = new Request('http://localhost/health');
     const response = await worker.fetch(request, mockEnv, mockContext);
+    expect(response.status).toBe(404);
+  });
+  
+  it('should handle health check endpoint with debug mode', async () => {
+    const request = new Request('http://localhost/health');
+    const response = await worker.fetch(request, mockEnvWithDebug, mockContext);
     
     // Health check may return 503 if storage is not fully functional in test environment
     expect([200, 503]).toContain(response.status);
@@ -65,25 +77,43 @@ describe('Worker HTTP Handler', () => {
     expect(text).toBe('Not found');
   });
   
-  it('should return 405 for GET request to /process', async () => {
-    const request = new Request('http://localhost/process', { method: 'GET' });
+  it('should return 404 for /process endpoint without debug mode', async () => {
+    const request = new Request('http://localhost/process', { method: 'POST' });
     const response = await worker.fetch(request, mockEnv, mockContext);
+    expect(response.status).toBe(404);
+  });
+  
+  it('should return 405 for GET request to /process with debug mode', async () => {
+    const request = new Request('http://localhost/process', { method: 'GET' });
+    const response = await worker.fetch(request, mockEnvWithDebug, mockContext);
     
     expect(response.status).toBe(405);
   });
   
-  it('should handle setup endpoint', async () => {
+  it('should return 404 for setup endpoint without debug mode', async () => {
     const request = new Request('http://localhost/setup');
     const response = await worker.fetch(request, mockEnv, mockContext);
+    expect(response.status).toBe(404);
+  });
+  
+  it('should handle setup endpoint with debug mode', async () => {
+    const request = new Request('http://localhost/setup');
+    const response = await worker.fetch(request, mockEnvWithDebug, mockContext);
     
     expect(response.status).toBe(200);
     const text = await response.text();
     expect(text).toContain('OAuth');
   });
   
-  it('should handle status endpoint', async () => {
+  it('should return 404 for status endpoint without debug mode', async () => {
     const request = new Request('http://localhost/status');
     const response = await worker.fetch(request, mockEnv, mockContext);
+    expect(response.status).toBe(404);
+  });
+  
+  it('should handle status endpoint with debug mode', async () => {
+    const request = new Request('http://localhost/status');
+    const response = await worker.fetch(request, mockEnvWithDebug, mockContext);
     
     expect(response.status).toBe(200);
     const status = await response.json() as any;
@@ -93,14 +123,43 @@ describe('Worker HTTP Handler', () => {
     expect(status).toHaveProperty('storageHealth');
   });
   
-  it('should return 401 for /process endpoint without auth', async () => {
+  it('should return 401 for /process endpoint without auth with debug mode', async () => {
     const request = new Request('http://localhost/process', { method: 'POST' });
-    const response = await worker.fetch(request, mockEnv, mockContext);
+    const response = await worker.fetch(request, mockEnvWithDebug, mockContext);
     
     expect(response.status).toBe(401);
     const body = await response.json() as any;
     expect(body.error).toBe('Not authenticated');
     expect(body.message).toContain('OAuth setup');
+  });
+
+  it('should return 404 for endpoints when debug mode is disabled', async () => {
+    const envWithoutDebug = { ...mockEnv, DEBUG_MODE: 'false' };
+    
+    // Test health endpoint
+    let request = new Request('http://localhost/health');
+    let response = await worker.fetch(request, envWithoutDebug, mockContext);
+    expect(response.status).toBe(404);
+    
+    // Test setup endpoint
+    request = new Request('http://localhost/setup');
+    response = await worker.fetch(request, envWithoutDebug, mockContext);
+    expect(response.status).toBe(404);
+    
+    // Test status endpoint
+    request = new Request('http://localhost/status');
+    response = await worker.fetch(request, envWithoutDebug, mockContext);
+    expect(response.status).toBe(404);
+    
+    // Test process endpoint
+    request = new Request('http://localhost/process', { method: 'POST' });
+    response = await worker.fetch(request, envWithoutDebug, mockContext);
+    expect(response.status).toBe(404);
+    
+    // Root path should still work
+    request = new Request('http://localhost/');
+    response = await worker.fetch(request, envWithoutDebug, mockContext);
+    expect(response.status).toBe(200);
   });
 });
 
@@ -116,9 +175,9 @@ describe('Worker Health Check', () => {
     expect(text).toContain('Configuration Error');
   });
   
-  it('should handle KV storage errors gracefully', async () => {
+  it('should handle KV storage errors gracefully with debug mode', async () => {
     const envWithFailingKV = {
-      ...mockEnv,
+      ...mockEnvWithDebug,
       STORAGE: {
         put: async () => { throw new Error('KV Error'); },
         get: async () => { throw new Error('KV Error'); },

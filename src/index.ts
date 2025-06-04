@@ -181,6 +181,12 @@ export default {
     try {
       const url = new URL(request.url);
 
+      // Check debug mode for all endpoints except root
+      if (url.pathname !== '/' && !config.debugMode) {
+        logger.warn(`Access denied to ${url.pathname} - debug mode is disabled`);
+        return new Response('Not found', { status: 404 });
+      }
+
       // Route handling
       switch (url.pathname) {
         case '/':
@@ -209,6 +215,10 @@ export default {
         case '/logs':
           // Error logs endpoint
           return await handleErrorLogs(getOrCreateStorageService(env), logger);
+
+        case '/debug-labels':
+          // Debug endpoint to check labels
+          return await handleDebugLabels(env, config, logger);
 
         default:
           return new Response('Not found', { status: 404 });
@@ -462,24 +472,6 @@ async function handleStatus(storage: StorageService, logger: Logger): Promise<Re
 // OAuth setup handler
 async function handleOAuthSetup(request: Request, auth: AuthService, logger: Logger): Promise<Response> {
   const url = new URL(request.url);
-  
-  // Check authorization for /setup endpoint
-  const config = globalConfig;
-  if (config?.setupAuthToken) {
-    const authHeader = request.headers.get('Authorization');
-    const providedToken = authHeader?.replace('Bearer ', '').trim();
-    
-    if (!providedToken || providedToken !== config.setupAuthToken) {
-      logger.warn('Unauthorized /setup access attempt');
-      return new Response('Unauthorized', { 
-        status: 401,
-        headers: { 
-          'WWW-Authenticate': 'Bearer realm="OAuth Setup"',
-          'Content-Type': 'text/plain'
-        }
-      });
-    }
-  }
 
   // Handle OAuth callback
   if (url.searchParams.has('code')) {
@@ -512,7 +504,7 @@ async function handleOAuthSetup(request: Request, auth: AuthService, logger: Log
             </style>
           </head>
           <body>
-            <h1 class="success">✓ OAuth Setup Complete</h1>
+            <h1 class="success">OAuth Setup Complete</h1>
             <p>Your Gmail Attachment Extractor has been successfully authorized.</p>
             <div class="info">
               <h3>Next Steps:</h3>
@@ -746,6 +738,84 @@ async function handleErrorLogs(storage: StorageService, logger: Logger): Promise
     logger.error('Error logs handler error:', error);
     return new Response(JSON.stringify({
       error: 'Failed to retrieve error logs',
+      message: error instanceof Error ? error.message : String(error)
+    }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+/**
+ * Debug handler to check Gmail labels and messages
+ */
+async function handleDebugLabels(
+  env: Env,
+  config: ValidatedConfig,
+  logger: Logger
+): Promise<Response> {
+  try {
+    logger.info('Debug labels endpoint triggered');
+
+    // Initialize services
+    const storageService = new StorageService(env.STORAGE);
+    const authService = new AuthService(storageService, config.googleClientId, config.googleClientSecret);
+    const accessToken = await authService.getValidToken();
+
+    // Get all labels
+    const labelsUrl = 'https://www.googleapis.com/gmail/v1/users/me/labels';
+    const labelsResponse = await fetch(labelsUrl, {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Accept': 'application/json'
+      }
+    });
+
+    const labelsData = await labelsResponse.json() as any;
+    const insuranceLabel = labelsData.labels?.find((label: any) => 
+      label.name === 'insurance claims/todo'
+    );
+
+    // Try different queries
+    const queries = [
+      `label:"insurance claims/todo"`,
+      `label:'insurance claims/todo'`,
+      insuranceLabel ? `label:${insuranceLabel.id}` : null,
+      `in:all label:"insurance claims/todo"`,
+      `is:unread`,
+      `has:attachment`,
+      `newer_than:30d`
+    ].filter(Boolean);
+
+    const results: any = {
+      labels: labelsData.labels?.map((l: any) => ({ id: l.id, name: l.name })),
+      insuranceLabel,
+      queries: {}
+    };
+
+    // Test each query
+    for (const query of queries) {
+      const searchUrl = `https://www.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(query!)}&maxResults=5&includeSpamTrash=true`;
+      const searchResponse = await fetch(searchUrl, {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Accept': 'application/json'
+        }
+      });
+      const searchData = await searchResponse.json() as any;
+      results.queries[query!] = {
+        resultSizeEstimate: searchData.resultSizeEstimate || 0,
+        messages: searchData.messages?.length || 0
+      };
+    }
+
+    return new Response(JSON.stringify(results, null, 2), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    logger.error('Debug labels failed:', error);
+    return new Response(JSON.stringify({
+      error: 'Debug failed',
       message: error instanceof Error ? error.message : String(error)
     }), {
       status: 500,

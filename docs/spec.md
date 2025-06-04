@@ -192,7 +192,7 @@ main = "src/index.ts"
 compatibility_date = "2024-01-01"
 
 [triggers]
-crons = ["0 0 * * 0"]  # Sunday midnight UTC
+crons = ["0 0 * * 0", "0 0 1 * *"]  # Sunday midnight UTC and 1st of month
 
 [[kv_namespaces]]
 binding = "STORAGE"

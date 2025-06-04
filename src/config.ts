@@ -46,7 +46,7 @@ export interface ValidatedConfig {
   processedLabel: string;
   errorLabel: string;
   driveFolderId?: string;
-  setupAuthToken?: string;
+  debugMode: boolean;
 }
 
 // Configuration validation errors
@@ -99,7 +99,7 @@ export function loadConfiguration(env: Env): ValidatedConfig {
     processedLabel: CONFIG.LABELS.PROCESSED,
     errorLabel: 'ProcessingError', // Default error label
     driveFolderId: env.DRIVE_FOLDER_ID?.trim(), // Optional Drive folder ID
-    setupAuthToken: env.SETUP_AUTH_TOKEN?.trim() // Optional setup auth token
+    debugMode: env.DEBUG_MODE === 'true' // Disabled by default, set to 'true' to enable web endpoints
   };
 }
 
@@ -128,4 +128,5 @@ export function logConfigurationStatus(config: ValidatedConfig, logger: { info: 
   logger.info(`  Max Emails Per Run: ${config.maxEmailsPerRun}`);
   logger.info(`  Max File Size: ${config.maxFileSizeMB}MB`);
   logger.info(`  Google Client ID: ${config.googleClientId.substring(0, 8)}...`);
+  logger.info(`  Debug Mode: ${config.debugMode ? 'ENABLED' : 'DISABLED'}`);
 }
